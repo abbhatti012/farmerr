@@ -425,7 +425,6 @@ class OrderController extends Controller
             'total_line_items_price' => 'nullable|numeric',
             'total_price' => 'nullable|numeric',
             'currency' => 'nullable|string',
-            'financial_status' => 'nullable|string',
             'fulfillment_status' => 'nullable|string',
             'buyer_accepts_marketing' => 'nullable',
             'confirmed' => 'nullable',
@@ -460,7 +459,6 @@ class OrderController extends Controller
             'total_line_items_price' => $validated['total_line_items_price'] ?? 0,
             'total_price' => $validated['total_price'] ?? ($validated['subtotal_price'] ?? 0),
             'currency' => $validated['currency'] ?? 'INR',
-            'financial_status' => $validated['financial_status'] ?? ($validated['payment_type'] === 'payg' ? 'pending' : 'pending'),
             'fulfillment_status' => $validated['fulfillment_status'] ?? 'unfulfilled',
             'buyer_accepts_marketing' => isset($validated['buyer_accepts_marketing']) ? 1 : 0,
             'confirmed' => isset($validated['confirmed']) ? 1 : 0,
@@ -569,7 +567,8 @@ class OrderController extends Controller
         $lineItemsCount = $order->lineItems()->count();
         if ($lineItemsCount > 0) {
             // call the existing sendOrderToZoho flow
-            return $this->sendOrderToZoho($request, $order->order_number);
+            // For manual orders created via this form, do not mark financial status as paid when creating Zoho invoice
+            return $this->sendOrderToZoho($request, $order->order_number, false);
         }
 
         // No line items — skip Zoho invoice creation and instruct the user
@@ -974,7 +973,7 @@ class OrderController extends Controller
         }
     }
 
-    public function sendOrderToZoho(Request $request, $order_number)
+    public function sendOrderToZoho(Request $request, $order_number, $markPaid = true)
     {
 
 
@@ -1031,7 +1030,7 @@ class OrderController extends Controller
             $customerFromZoho = ZohoController::createOrGetCustomer($customer_id, $addressPost);
             // dd($customerFromZoho);
             // prx($customerFromZoho);
-            $res = ZohoController::createInvoice($customerFromZoho, $cartData, $promo_code_amount, $shipping_amt, $addressPost, $order_number);
+            $res = ZohoController::createInvoice($customerFromZoho, $cartData, $promo_code_amount, $shipping_amt, $addressPost, $order_number, $markPaid);
             // dd($res);
         } catch (\Exception $error) {
             dd($error);

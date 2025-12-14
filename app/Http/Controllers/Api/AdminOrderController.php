@@ -171,4 +171,47 @@ class AdminOrderController extends Controller
             ],
         ], 200);
     }
+
+    /**
+     * Update financial status for an order via API (authenticated Admin)
+     */
+    public function updateFinancialStatus(Request $request, $orderId)
+    {
+        $user = $request->user();
+        if (! $user || ! ($user instanceof \App\Models\Admin)) {
+            return response()->json(['status' => 'error', 'message' => 'Unauthenticated'], 401);
+        }
+
+        $validated = $request->validate([
+            'financial_status' => 'required|string|max:50',
+        ]);
+
+        $allowed = [
+            'pending', 'paid', 'refunded', 'partially_refunded',
+            'authorized', 'voided', 'cancelled', 'partially_paid'
+        ];
+
+        $status = strtolower($validated['financial_status']);
+        if (! in_array($status, $allowed, true)) {
+            return response()->json(['status' => 'error', 'message' => 'Invalid financial_status', 'allowed' => $allowed], 422);
+        }
+
+        $order = Order::find($orderId);
+        if (! $order) {
+            return response()->json(['status' => 'error', 'message' => 'Order not found'], 404);
+        }
+
+        $previous = $order->financial_status;
+        $order->financial_status = $status;
+        $order->save();
+
+        Log::info('API Order financial_status updated', [
+            'admin_id' => $user->id,
+            'order_id' => $order->id,
+            'from' => $previous,
+            'to' => $status,
+        ]);
+
+        return response()->json(['status' => 'success', 'message' => 'Financial status updated', 'order' => $order], 200);
+    }
 }
