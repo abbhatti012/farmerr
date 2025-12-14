@@ -93,6 +93,9 @@
                 <a href="{{ url('admin/orders_update') }}" class="btn btn-sm btn-dark ms-3 px-4 py-3">
                     Update <span class="d-none d-sm-inline">Order</span>
                 </a>
+                <a href="{{ route('admin.orders.create') }}" class="btn btn-sm btn-primary ms-3 px-4 py-3">
+                    Create Order
+                </a>
                 <!-- New button to trigger Zoho order creation -->
                 <!-- <form action="{{ route('admin.orders.create.zoho') }}" method="POST" class="ms-3">
         @csrf
@@ -234,9 +237,9 @@
                             </td>
                             <td>
                                 @if(!empty($val->shippingAddress))
-                                {{ $val->shippingAddress->address1 }}, {{ $val->shippingAddress->city }}, {{ $val->shippingAddress->province }}
+                                {{ $val->shippingAddress->address1 ?? '' }}, {{ $val->shippingAddress->city ?? '' }}, {{ $val->shippingAddress->province ?? '' }}
                                 @else
-                                {{ $val->billingAddress->address1 }}, {{ $val->billingAddress->city }}, {{ $val->billingAddress->province }}
+                                {{ $val->billingAddress->address1 ?? '' }}, {{ $val->billingAddress->city ?? '' }}, {{ $val->billingAddress->province ?? '' }}
                                 @endif
                             </td>
                             <!-- <td>{{$val->tags}}</td> -->

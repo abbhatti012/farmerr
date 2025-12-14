@@ -99,7 +99,6 @@ class OrderController extends Controller
         // Get the total number of today's orders
         $totalOrdersToday = $todaysOrders->count();
 
-
         return view('admin.orders.list', [
             'orders' => $orders,
             'totalOrdersToday' => $totalOrdersToday,

@@ -364,14 +364,217 @@ class OrderController extends Controller
                     || strpos($name, 'greview_delhi') !== false;
             })
             ->values();
+        // dd($order->billingAddress);
 
-        // dd($raw, $processedTemplates);
         return view('admin.orders.view', [
             'order' => $order,
             'templates' => $processedTemplates,
             'previousOrder' => $previousOrder,
             'nextOrder' => $nextOrder,
         ]);
+    }
+
+    /**
+     * Show create order form
+     */
+    public function create()
+    {
+        // Load product variants for the product dropdown in the order form
+        $variants = \App\Models\ProductVariant::with('product')->whereNotNull('sku')->get();
+        return view('admin.orders.create', [
+            'variants' => $variants,
+        ]);
+    }
+
+    /**
+     * Store a manually created order
+     */
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
+            'customer_first_name' => 'required|string|max:255',
+            'customer_last_name' => 'required|string|max:255',
+            'billing_name' => 'required|string|max:255',
+            'phone' => 'required|string|max:32',
+            'email' => 'required|email|max:255',
+
+            'billing_address1' => 'required|string',
+            'billing_city' => 'required|string',
+            'billing_province' => 'required|string',
+            'billing_country' => 'required|string',
+            'billing_country_code' => 'nullable|string',
+
+            'shipping_address1' => 'required|string',
+            'shipping_city' => 'required|string',
+            'shipping_province' => 'required|string',
+            'shipping_country' => 'required|string',
+            'shipping_country_code' => 'nullable|string',
+
+            'payment_type' => 'required|string',
+            'order_type' => 'required|string',
+            'delivery_time_slot' => 'required|string',
+            'delivery_date' => 'required|date',
+            'order_date' => 'required|date',
+            'order_notes' => 'required|string',
+            'order_channel' => 'required|string',
+            // pricing & status
+            'subtotal_price' => 'nullable|numeric',
+            'total_tax' => 'nullable|numeric',
+            'total_shipping_price' => 'nullable|numeric',
+            'total_discounts' => 'nullable|numeric',
+            'total_line_items_price' => 'nullable|numeric',
+            'total_price' => 'nullable|numeric',
+            'currency' => 'nullable|string',
+            'financial_status' => 'nullable|string',
+            'fulfillment_status' => 'nullable|string',
+            'buyer_accepts_marketing' => 'nullable',
+            'confirmed' => 'nullable',
+            'contact_email' => 'nullable|email',
+            'tags' => 'nullable|string',
+            // line items
+            'items' => 'nullable|array',
+            'items.*.product_id' => 'required_with:items|integer',
+            'items.*.variant_id' => 'required_with:items|integer',
+            'items.*.sku' => 'required_with:items|string',
+            'items.*.price' => 'required_with:items|numeric',
+            'items.*.quantity' => 'required_with:items|integer|min:1',
+            'items.*.title' => 'nullable|string',
+        ]);
+
+        // Create order
+        $order = Order::create([
+            'order_date' => $validated['order_date'],
+            // upto six digits
+            'order_number' => random_int(100000, 999999),
+            'email' => $validated['email'],
+            'phone' => $validated['phone'],
+            'financial_status' => 'pending',
+            'delivery_date' => $validated['delivery_date'],
+            'note' => $validated['order_notes'],
+            'occasion' => $validated['order_type'] ?? null,
+            // pricing & status
+            'subtotal_price' => $validated['subtotal_price'] ?? 0,
+            'total_tax' => $validated['total_tax'] ?? 0,
+            'total_shipping_price' => $validated['total_shipping_price'] ?? 0,
+            'total_discounts' => $validated['total_discounts'] ?? 0,
+            'total_line_items_price' => $validated['total_line_items_price'] ?? 0,
+            'total_price' => $validated['total_price'] ?? ($validated['subtotal_price'] ?? 0),
+            'currency' => $validated['currency'] ?? 'INR',
+            'financial_status' => $validated['financial_status'] ?? ($validated['payment_type'] === 'payg' ? 'pending' : 'pending'),
+            'fulfillment_status' => $validated['fulfillment_status'] ?? 'unfulfilled',
+            'buyer_accepts_marketing' => isset($validated['buyer_accepts_marketing']) ? 1 : 0,
+            'confirmed' => isset($validated['confirmed']) ? 1 : 0,
+            'contact_email' => $validated['contact_email'] ?? null,
+            'tags' => $validated['tags'] ?? null,
+        ]);
+
+        // Create customer
+        $customer = Customer::create([
+            'order_id' => $order->id,
+            'first_name' => $validated['customer_first_name'],
+            'last_name' => $validated['customer_last_name'],
+            'email' => $validated['email'],
+            'phone' => $validated['phone'],
+        ]);
+
+        // Create billing address
+        BillingAddress::create([
+            'order_id' => $order->id,
+            'first_name' => $validated['customer_first_name'],
+            'last_name' => $validated['customer_last_name'],
+            'address1' => $validated['billing_address1'],
+            'city' => $validated['billing_city'],
+            'province' => $validated['billing_province'],
+            'country' => $validated['billing_country'],
+            'country_code' => $validated['billing_country_code'] ?? 'IN',
+            'phone' => $validated['phone'],
+            'name' => $validated['customer_first_name'].' '.$validated['customer_last_name'],
+        ]);
+
+        // Create shipping address
+        ShippingAddress::create([
+            'order_id' => $order->id,
+            'first_name' => $validated['customer_first_name'],
+            'last_name' => $validated['customer_last_name'],
+            'address1' => $validated['shipping_address1'],
+            'city' => $validated['shipping_city'],
+            'province' => $validated['shipping_province'],
+            'country' => $validated['shipping_country'],
+            'country_code' => $validated['shipping_country_code'] ?? 'IN',
+            'phone' => $validated['phone'],
+            'name' => $validated['customer_first_name'].' '.$validated['customer_last_name'],
+        ]);
+    
+        // Create line items if provided
+        if (!empty($validated['items']) && is_array($validated['items'])) {
+            // Log the incoming items payload for debugging
+            try {
+                Log::info('ManualOrderItemsPayload', ['order_id' => $order->id, 'items' => $validated['items']]);
+            } catch (\Exception $e) {
+                // Safe guard: logging should not break flow
+                Log::error('Failed to log ManualOrderItemsPayload: ' . $e->getMessage());
+            }
+
+            foreach ($validated['items'] as $idx => $it) {
+                try {
+                    // Determine a safe line_items_id. Existing values may be numeric or custom strings.
+                    $lastLineItem = LineItem::orderBy('id', 'desc')->first();
+                    if ($lastLineItem && is_numeric($lastLineItem->line_items_id)) {
+                        $lineItemsId = $lastLineItem->line_items_id + 1;
+                    } else {
+                        // fallback to a manual identifier to avoid NULL constraints
+                        $lineItemsId = 'manual-' . $order->id . '-' . ($idx + 1);
+                    }
+
+                    Log::info('Creating manual line item', [
+                        'order_id' => $order->id,
+                        'item_index' => $idx,
+                        'item_payload' => $it,
+                        'computed_line_items_id' => $lineItemsId,
+                    ]);
+
+                    $created = LineItem::create([
+                        'order_id' => $order->id,
+                        'product_id' => $it['product_id'] ?? null,
+                        'line_items_id' => $lineItemsId,
+                        'variant_id' => $it['variant_id'] ?? null,
+                        'quantity' => $it['quantity'] ?? 1,
+                        'price' => $it['price'] ?? 0,
+                        'total_discount' => 0,
+                        'name' => $it['title'] ?? null,
+                        'sku' => $it['sku'] ?? null,
+                        'fulfillment_status' => 'unfulfilled',
+                        'requires_shipping' => 1,
+                        'taxable' => 1,
+                        'title' => $it['title'] ?? null,
+                    ]);
+
+                    Log::info('Manual line item created', ['id' => $created->id ?? null, 'line_items_id' => $created->line_items_id ?? null]);
+                } catch (\Exception $e) {
+                    // Log detailed exception information for debugging
+                    Log::error('Failed to create line item for manual order', [
+                        'order_id' => $order->id,
+                        'item' => $it,
+                        'computed_line_items_id' => $lineItemsId ?? null,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString(),
+                    ]);
+                }
+            }
+        } else {
+            Log::info('No line items provided for manual order', ['order_id' => $order->id]);
+        }
+
+        // If the order has line items, attempt to create an invoice in Zoho automatically.
+        $lineItemsCount = $order->lineItems()->count();
+        if ($lineItemsCount > 0) {
+            // call the existing sendOrderToZoho flow
+            return $this->sendOrderToZoho($request, $order->order_number);
+        }
+
+        // No line items — skip Zoho invoice creation and instruct the user
+        return redirect()->route('admin.orders.show', $order->id)
+            ->with('success', 'Order created successfully. Add line items or click "Create Zoho Order" to send invoice to Zoho.');
     }
     public function sendTemplateSms(Request $request, \App\Services\GupshupService $gupshup)
     {
@@ -775,13 +978,14 @@ class OrderController extends Controller
     {
 
 
-        $order              = Order::with('lineItems')->where('order_number', $order_number)->first();
+        $order = Order::with('lineItems')->where('order_number', $order_number)->first();
         if (!$order) {
             // Handle the case where the order is not found
             return redirect()->back()->with('message', 'Order not found.');
         }
 
         $order_id = $order->id;
+        // dd($order_id);
         $customer        = Customer::where('order_id', $order_id)->first();
         $customer_id    =   $customer->id;
         $promo_code_amount  = $order->promo_code_amount ?? null;

@@ -353,13 +353,33 @@ class ZohoController extends Controller
         $shippingAddress = ShippingAddress::where('order_id', $getOrder->id)->first();
         $buyer = $norm($shippingAddress->province ?? '');
 
-        // If shipping is not available, fallback to billing
+        // If shipping is not available, fallback to billing data passed in via $addressPost
         if ($buyer === '') {
-            $buyer = $norm($addressPost['state_code'] ?? '')
-                ?: $norm($addressPost['state'] ?? '');
+            $buyer = $norm($addressPost['state_code'] ?? '') ?: $norm($addressPost['state'] ?? '');
         }
 
-        if ($buyer === '') throw new \Exception('Could not determine buyer state');
+        // If still missing, try the stored billing address record
+        if ($buyer === '') {
+            try {
+                $billingAddress = \App\Models\BillingAddress::where('order_id', $getOrder->id)->first();
+                if ($billingAddress && !empty($billingAddress->province)) {
+                    $buyer = $norm($billingAddress->province);
+                    \Log::info('createInvoice - resolved buyer from DB billingAddress', ['order_number' => $orderId, 'billing_province' => $billingAddress->province, 'buyer' => $buyer]);
+                }
+            } catch (\Exception $e) {
+                \Log::warning('createInvoice - error fetching BillingAddress for fallback', ['order_number' => $orderId, 'error' => $e->getMessage()]);
+            }
+        }
+
+        // Final safeguard: if still empty, log full context and default to 'DL' to avoid hard failures
+        if ($buyer === '') {
+            \Log::warning('createInvoice - Could not determine buyer state; defaulting to DL', [
+                'order_number' => $orderId,
+                'shippingAddress' => $shippingAddress ? $shippingAddress->toArray() : null,
+                'addressPost' => $addressPost,
+            ]);
+            $buyer = 'DL';
+        }
 
         // --- Choose seller branch (same state if we are registered there; else route via map; else default DL) ---
         $sellerCode = array_key_exists($buyer, $registered) ? $buyer : ($routeMap[$buyer] ?? 'DL');
@@ -524,32 +544,42 @@ class ZohoController extends Controller
         $apiUrl = "https://www.zohoapis.com/books/v3/chartofaccounts";
 
         try {
-            // Fetch all chart of accounts
+            // Fetch all chart of accounts with retries and extended timeout to avoid intermittent cURL timeouts
             $response = Http::withHeaders([
                 'Authorization' => 'Zoho-oauthtoken ' . $accessToken,
-            ])->get($apiUrl, [
+            ])->retry(3, 2000)->timeout(60)->get($apiUrl, [
                 'organization_id' => $organizationId,
             ]);
 
             if ($response->successful()) {
-                $accounts = $response->json()['chartofaccounts'];
+                $data = $response->json();
+                $accounts = $data['chartofaccounts'] ?? [];
 
                 // Find the account with the specified name
                 foreach ($accounts as $account) {
-                    if ($account['account_name'] === $accountName) {
+                    if (isset($account['account_name']) && $account['account_name'] === $accountName) {
                         return $account['account_id']; // Return the account ID
                     }
                 }
 
                 // If no matching account is found, throw an exception
+                \Log::error('Zoho getDepositAccountIdByName - account not found', ['accountName' => $accountName, 'organization_id' => $organizationId, 'returned_count' => count($accounts)]);
                 throw new \Exception("Account not found: $accountName");
-            } else {
-                // Log and throw an error if the API call fails
-                // \Log::error('Error fetching chart of accounts: ' . $response->body());
-                throw new \Exception('Error fetching chart of accounts: ' . $response->body());
             }
+
+            // Non-successful response
+            \Log::error('Zoho getDepositAccountIdByName - non-success response', ['status' => $response->status(), 'body' => $response->body()]);
+            throw new \Exception('Error fetching chart of accounts: HTTP ' . $response->status() . ' - ' . substr($response->body(), 0, 1000));
         } catch (\Exception $e) {
-            // \Log::error('Error in getDepositAccountIdByName: ' . $e->getMessage());
+            // Log detailed error including stack for diagnostics
+            \Log::error('Error in getDepositAccountIdByName', [
+                'accountName' => $accountName,
+                'organization_id' => $organizationId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            // Re-throw a clearer exception for callers
             throw new \Exception('Error in getDepositAccountIdByName: ' . $e->getMessage());
         }
     }

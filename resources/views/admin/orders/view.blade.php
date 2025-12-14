@@ -293,7 +293,7 @@
                             <!--begin::Card body-->
                             <!-- <div class="card-body pb-3 pt-0"> -->
                             <!-- <div class="">
-                                    <form method="POST" action="{{ route('admin.orders.fulfill', $order->shopify_order_id) }}">
+                                    <form method="POST" action="{{ route('admin.orders.fulfill', $order->id) }}">
                                         @csrf
                                         <div class="row">
                                             <div class="col-md-12 form-group">

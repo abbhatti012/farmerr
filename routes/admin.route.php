@@ -47,6 +47,8 @@ Route::middleware(['admin.auth'])->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
     Route::get('/orders/list', [OrderController::class, 'list'])->name('orders.list');
     Route::get('/orders/list-test', [OrderController::class, 'listTest'])->name('orders.list.test');
+    Route::get('/orders/create', [OrderController::class, 'create'])->name('orders.create');
+    Route::post('/orders/create', [OrderController::class, 'store'])->name('orders.store');
     Route::get('/orders_update', [ShopifyController::class, 'fetchOrders']);
     Route::get('orders/{order}', [OrderController::class, 'show'])->name('orders.show');
     Route::post('orders/{order}/fulfill', [OrderController::class, 'fulfillOrder'])->name('orders.fulfill');
