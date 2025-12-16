@@ -987,7 +987,8 @@ class OrderController extends Controller
         // dd($order_id);
         $customer        = Customer::where('order_id', $order_id)->first();
         $customer_id    =   $customer->id;
-        $promo_code_amount  = $order->promo_code_amount ?? null;
+        // Use promo_code_amount when present; otherwise fall back to total_discounts
+        $promo_code_amount  = $order->promo_code_amount ?? $order->total_discounts ?? 0;
         $shipping_amt       = $order->total_shipping_price;
         //  prx($shipping_amt);
         try {
@@ -1030,6 +1031,13 @@ class OrderController extends Controller
             $customerFromZoho = ZohoController::createOrGetCustomer($customer_id, $addressPost);
             // dd($customerFromZoho);
             // prx($customerFromZoho);
+            // Log the discount being sent to Zoho for debugging visibility
+            try {
+                \Log::info('Sending invoice to Zoho with discount', ['order' => $order_number, 'discount' => $promo_code_amount]);
+            } catch (\Exception $e) {
+                // ignore logging errors
+            }
+
             $res = ZohoController::createInvoice($customerFromZoho, $cartData, $promo_code_amount, $shipping_amt, $addressPost, $order_number, $markPaid);
             // dd($res);
         } catch (\Exception $error) {
