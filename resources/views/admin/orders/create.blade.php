@@ -350,6 +350,8 @@
                 itemsTbody.appendChild(tr);
                 variantSelect.selectedIndex = 0;
                 variantQty.value = 1;
+                // Recompute pricing fields after adding
+                computeTotals();
             });
         }
 
@@ -358,8 +360,93 @@
             if (e.target && e.target.classList.contains('removeItemBtn')) {
                 const row = e.target.closest('tr');
                 if (row) row.remove();
+                // Recompute totals after removal
+                computeTotals();
             }
         });
+
+        // Update preview/totals when variant selection or qty changes
+        variantSelect.addEventListener('change', function() {
+            // if no items added yet, show the selection as the subtotal preview
+            const rows = itemsTbody.querySelectorAll('tr').length;
+            if (rows === 0) {
+                updateTotalsFromSelection();
+            }
+        });
+
+        variantQty.addEventListener('input', function() {
+            const rows = itemsTbody.querySelectorAll('tr').length;
+            if (rows === 0) {
+                updateTotalsFromSelection();
+            }
+        });
+
+        // Recompute totals when tax/shipping/discount fields change
+        const taxInput = document.querySelector('input[name="total_tax"]');
+        const shippingInput = document.querySelector('input[name="total_shipping_price"]');
+        const discountsInput = document.querySelector('input[name="total_discounts"]');
+
+        function priceInputsChanged() {
+            const rows = itemsTbody.querySelectorAll('tr').length;
+            if (rows > 0) {
+                computeTotals();
+            } else {
+                updateTotalsFromSelection();
+            }
+        }
+
+        if (taxInput) taxInput.addEventListener('input', priceInputsChanged);
+        if (shippingInput) shippingInput.addEventListener('input', priceInputsChanged);
+        if (discountsInput) discountsInput.addEventListener('input', priceInputsChanged);
+
+        function updateTotalsFromSelection() {
+            const opt = variantSelect.options[variantSelect.selectedIndex];
+            if (!opt || !opt.value) {
+                // clear totals
+                setNumberInput('subtotal_price', '');
+                setNumberInput('total_line_items_price', '');
+                setNumberInput('total_price', '');
+                return;
+            }
+            const price = parseFloat(opt.dataset.price) || 0;
+            const qty = parseInt(variantQty.value, 10) || 1;
+            const subtotal = price * qty;
+            setNumberInput('subtotal_price', subtotal.toFixed(2));
+            setNumberInput('total_line_items_price', subtotal.toFixed(2));
+            // compute grand total using tax/shipping/discount if present
+            recomputeGrandTotal(subtotal);
+        }
+
+        function computeTotals() {
+            // Sum existing items in the table
+            let subtotal = 0;
+            const rows = itemsTbody.querySelectorAll('tr');
+            rows.forEach(r => {
+                const priceInput = r.querySelector('input[name$="[price]"]');
+                const qtyInput = r.querySelector('input[name$="[quantity]"]');
+                const price = priceInput ? parseFloat(priceInput.value) : 0;
+                const qty = qtyInput ? parseInt(qtyInput.value, 10) : 1;
+                subtotal += (price || 0) * (qty || 0);
+            });
+            setNumberInput('subtotal_price', subtotal.toFixed(2));
+            setNumberInput('total_line_items_price', subtotal.toFixed(2));
+            recomputeGrandTotal(subtotal);
+        }
+
+        function recomputeGrandTotal(subtotal) {
+            const tax = parseFloat(document.querySelector('input[name="total_tax"]').value) || 0;
+            const shipping = parseFloat(document.querySelector('input[name="total_shipping_price"]').value) || 0;
+            const discounts = parseFloat(document.querySelector('input[name="total_discounts"]').value) || 0;
+            const grand = (subtotal + tax + shipping - discounts) || 0;
+            setNumberInput('total_price', grand.toFixed(2));
+        }
+
+        // Helper to set numeric inputs by name
+        function setNumberInput(name, value) {
+            const el = document.querySelector('input[name="' + name + '"]');
+            if (!el) return;
+            el.value = value;
+        }
 
         function escapeHtml(str) {
             if (!str) return '';
