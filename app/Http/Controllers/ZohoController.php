@@ -271,6 +271,105 @@ class ZohoController extends Controller
         return ['IGST0' => $igst, 'GST0_GROUP' => $gstg];
     }
 
+    /**
+     * Fetch organization taxes from Zoho and return array keyed by tax_id.
+     * Cached for short duration to avoid repeated API calls.
+     */
+    private static function fetchOrgTaxes(): array
+    {
+        return \Cache::remember('zoho_org_taxes_map', 300, function () {
+            try {
+                $client = new Client();
+                $resp = $client->get('https://www.zohoapis.com/books/v3/settings/taxes', [
+                    'headers' => ['Authorization' => 'Zoho-oauthtoken ' . self::generateToken()],
+                    'query' => ['organization_id' => env('ZOHO_API_ORGANIZATION_ID')],
+                ]);
+                $body = json_decode($resp->getBody()->getContents(), true);
+                $taxes = $body['taxes'] ?? [];
+                $out = [];
+                foreach ($taxes as $t) {
+                    $out[$t['tax_id']] = $t;
+                }
+                return $out;
+            } catch (\Exception $e) {
+                \Log::error('fetchOrgTaxes failed: ' . $e->getMessage());
+                return [];
+            }
+        });
+    }
+
+    /**
+     * Find an organization tax id by matching percentage (best-effort).
+     */
+    private static function findOrgTaxIdByPercentage(float $percentage): ?string
+    {
+        $taxes = self::fetchOrgTaxes();
+        foreach ($taxes as $taxId => $t) {
+            $p = isset($t['tax_percentage']) ? (float)$t['tax_percentage'] : null;
+            if ($p === $percentage) return $taxId;
+            if (!empty($t['taxes']) && is_array($t['taxes'])) {
+                foreach ($t['taxes'] as $component) {
+                    if (isset($component['tax_percentage']) && (float)$component['tax_percentage'] === $percentage) {
+                        return $taxId;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Choose a tax_id from item tax preferences based on whether the order is interstate.
+     */
+    private static function selectTaxIdFromItemTaxPreferences(array $taxBySpec, bool $isInter): ?string
+    {
+        $keys = array_keys($taxBySpec);
+        $lowerKeys = array_map('strtolower', $keys);
+
+        if ($isInter) {
+            foreach ($lowerKeys as $i => $k) {
+                if (strpos($k, 'igst') !== false || strpos($k, 'inter') !== false) {
+                    return $taxBySpec[$keys[$i]]['tax_id'] ?? null;
+                }
+            }
+        } else {
+            foreach ($lowerKeys as $i => $k) {
+                if (strpos($k, 'sgst') !== false || strpos($k, 'cgst') !== false || strpos($k, 'intra') !== false) {
+                    return $taxBySpec[$keys[$i]]['tax_id'] ?? null;
+                }
+            }
+        }
+
+        foreach ($taxBySpec as $spec => $meta) {
+            if (!empty($meta['tax_id'])) return $meta['tax_id'];
+        }
+        return null;
+    }
+
+    /**
+     * Admin endpoint: return organization taxes from Zoho (cached)
+     */
+    public function getTaxes(Request $request)
+    {
+        $cacheKey = 'zoho_org_taxes_list';
+        $taxes = \Cache::remember($cacheKey, 300, function () {
+            try {
+                $client = new Client();
+                $resp = $client->get('https://www.zohoapis.com/books/v3/settings/taxes', [
+                    'headers' => ['Authorization' => 'Zoho-oauthtoken ' . self::generateToken()],
+                    'query' => ['organization_id' => env('ZOHO_API_ORGANIZATION_ID')],
+                ]);
+                $body = json_decode($resp->getBody()->getContents(), true);
+                return $body['taxes'] ?? [];
+            } catch (\Exception $e) {
+                \Log::error('getTaxes failed: ' . $e->getMessage());
+                return [];
+            }
+        });
+
+        return response()->json(['taxes' => array_values($taxes)]);
+    }
+
 
     public static function createInvoice($customer, $cartData, $discount = 0, $shipping_amt = 0, $addressPost, $orderId, $markPaid = true)
     {
@@ -406,16 +505,52 @@ class ZohoController extends Controller
             'gst0_group' => $gst0g
         ]);
 
-        // --- Build line items (always include tax_id) ---
+        // --- Build line items (respect any per-item tax_id supplied by the caller) ---
         $line_items = [];
         foreach ($cartData as $cart) {
             $item = self::skuToItemId($cart->item_id);
+
+            // If the caller provided an explicit Zoho tax_id for the item, use it
+            $resolvedTaxId = null;
+            if (!empty($cart->tax_id)) {
+                $resolvedTaxId = $cart->tax_id;
+            }
+
+            // If not supplied, fall back to existing resolution logic
+            if (!$resolvedTaxId) {
+                // Prefer item-level tax preferences returned by Zoho for the SKU
+                if (!empty($item['tax_by_specification']) && is_array($item['tax_by_specification'])) {
+                    $resolvedTaxId = self::selectTaxIdFromItemTaxPreferences($item['tax_by_specification'], $isInter);
+                }
+
+                // If not resolved from item, try to match org taxes by percentage
+                if (!$resolvedTaxId) {
+                    $taxPercentage = null;
+                    if (!empty($item['tax_by_specification'])) {
+                        foreach ($item['tax_by_specification'] as $spec => $meta) {
+                            if (!empty($meta['tax_percentage'])) {
+                                $taxPercentage = (float)$meta['tax_percentage'];
+                                break;
+                            }
+                        }
+                    }
+                    if ($taxPercentage !== null) {
+                        $resolvedTaxId = self::findOrgTaxIdByPercentage($taxPercentage);
+                    }
+                }
+
+                // final fallback to configured zero-tax id
+                if (!$resolvedTaxId) {
+                    $resolvedTaxId = $taxId;
+                }
+            }
+
             $line_items[] = [
                 'name'     => $item['item_name'],
                 'rate'     => $cart->price,
                 'quantity' => $cart->qty,
                 'item_id'  => $item['item_id'],
-                'tax_id'   => $taxId,
+                'tax_id'   => $resolvedTaxId,
                 'hsn_or_sac' => $item['hsn_or_sac'],
             ];
         }
@@ -499,15 +634,32 @@ class ZohoController extends Controller
         } catch (\Exception $e) {
             \DB::table('orders')->where('id', $orderId)->update(['zoho_status' => 0]);
 
+            // Try to extract response body from Guzzle RequestException if present
+            $responseBody = null;
+            if ($e instanceof \GuzzleHttp\Exception\RequestException && $e->hasResponse()) {
+                try {
+                    $responseBody = (string)$e->getResponse()->getBody();
+                } catch (\Exception $_) {
+                    $responseBody = null;
+                }
+            }
+
             \Log::error('ZOHO INVOICE TAX ERROR', [
                 'buyer' => $buyer,
                 'seller' => $sellerCode,
                 'isInter' => $isInter,
                 'tax_id_used' => $taxId,
-                'msg' => $e->getMessage(),
+                'exception_message' => $e->getMessage(),
+                'response_body' => $responseBody,
             ]);
 
-            throw new \Exception("Error creating invoice: " . $e->getMessage());
+            $userMessage = $e->getMessage();
+            if ($responseBody) {
+                // include response body for debugging (it may be JSON)
+                $userMessage .= ' | response: ' . $responseBody;
+            }
+
+            throw new \Exception('Error creating invoice: ' . $userMessage);
         }
     }
 

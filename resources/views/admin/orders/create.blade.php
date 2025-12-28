@@ -164,6 +164,7 @@
                     <thead>
                         <tr>
                             <th>Product</th>
+                            <th>Tax</th>
                             <th>Variant</th>
                             <th>SKU</th>
                             <th class="text-end">Price</th>
@@ -316,6 +317,9 @@
         const variantQty = document.getElementById('variantQty');
         const itemsTbody = document.querySelector('#itemsTable tbody');
 
+        // Zoho taxes passed from server-side if available; fallback to empty array
+        window.zohoTaxes = @json($zohoTaxes ?? []);
+
         if (addItemBtn) {
             addItemBtn.addEventListener('click', function() {
                 const opt = variantSelect.options[variantSelect.selectedIndex];
@@ -334,8 +338,20 @@
 
                     const index = itemsTbody.querySelectorAll('tr').length;
                     const tr = document.createElement('tr');
+                    // Build tax select HTML from cached zohoTaxes if available
+                    let taxSelectHtml = '<select class="form-select form-select-sm tax-select" name="items[' + index + '][tax_id]">';
+                    taxSelectHtml += '<option value="">Default</option>';
+                    if (window.zohoTaxes && Array.isArray(window.zohoTaxes)) {
+                        window.zohoTaxes.forEach(t => {
+                            const label = (t.tax_name || t.name) + ' (' + (t.tax_percentage ?? t.tax_percentage) + '%)';
+                            taxSelectHtml += '<option value="' + (t.tax_id || t.id) + '">' + escapeHtml(label) + '</option>';
+                        });
+                    }
+                    taxSelectHtml += '</select>';
+
                     tr.innerHTML = `
                         <td>${escapeHtml(productTitle)}</td>
+                        <td>${taxSelectHtml}</td>
                         <td>${escapeHtml(title)}</td>
                         <td>${escapeHtml(sku)}</td>
                         <td class="text-end">${price}<input type="hidden" name="items[${index}][price]" value="${price}"></td>

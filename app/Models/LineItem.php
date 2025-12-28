@@ -11,6 +11,6 @@ class LineItem extends Model
     protected $fillable = [
         'order_id', 'product_id','line_items_id' ,'variant_id', 'quantity', 'price',
         'total_discount', 'name', 'sku', 'fulfillment_status',
-        'requires_shipping', 'taxable', 'title'
+        'requires_shipping', 'taxable', 'title', 'tax_id'
     ];
 }

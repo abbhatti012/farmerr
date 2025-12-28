@@ -381,8 +381,26 @@ class OrderController extends Controller
     {
         // Load product variants for the product dropdown in the order form
         $variants = \App\Models\ProductVariant::with('product')->whereNotNull('sku')->get();
+        // Try to fetch Zoho taxes server-side so the form can render tax dropdowns immediately
+        $zohoTaxes = [];
+        try {
+            $zohoTaxes = \Cache::remember('zoho_org_taxes_list', 300, function () {
+                $client = new \GuzzleHttp\Client();
+                $resp = $client->get('https://www.zohoapis.com/books/v3/settings/taxes', [
+                    'headers' => ['Authorization' => 'Zoho-oauthtoken ' . \App\Http\Controllers\ZohoController::generateToken()],
+                    'query' => ['organization_id' => env('ZOHO_API_ORGANIZATION_ID')],
+                ]);
+                $body = json_decode($resp->getBody()->getContents(), true);
+                return $body['taxes'] ?? [];
+            });
+        } catch (\Exception $e) {
+            \Log::warning('Could not load Zoho taxes in admin create view: ' . $e->getMessage());
+            $zohoTaxes = [];
+        }
+
         return view('admin.orders.create', [
             'variants' => $variants,
+            'zohoTaxes' => $zohoTaxes,
         ]);
     }
 
@@ -438,6 +456,7 @@ class OrderController extends Controller
             'items.*.price' => 'required_with:items|numeric',
             'items.*.quantity' => 'required_with:items|integer|min:1',
             'items.*.title' => 'nullable|string',
+            'items.*.tax_id' => 'nullable|string',
         ]);
 
         // Create order
@@ -544,6 +563,7 @@ class OrderController extends Controller
                         'fulfillment_status' => 'unfulfilled',
                         'requires_shipping' => 1,
                         'taxable' => 1,
+                        'tax_id' => $it['tax_id'] ?? null,
                         'title' => $it['title'] ?? null,
                     ]);
 
@@ -564,12 +584,13 @@ class OrderController extends Controller
         }
 
         // If the order has line items, attempt to create an invoice in Zoho automatically.
-        $lineItemsCount = $order->lineItems()->count();
-        if ($lineItemsCount > 0) {
-            // call the existing sendOrderToZoho flow
-            // For manual orders created via this form, do not mark financial status as paid when creating Zoho invoice
-            return $this->sendOrderToZoho($request, $order->order_number, false);
-        }
+        // $lineItemsCount = $order->lineItems()->count();
+        // if ($lineItemsCount > 0) {
+        //     // call the existing sendOrderToZoho flow
+        //     // For manual orders created via this form, do not mark financial status as paid when creating Zoho invoice
+        //     $submittedItems = $validated['items'] ?? null;
+        //     return $this->sendOrderToZoho($request, $order->order_number, false, $submittedItems);
+        // }
 
         // No line items — skip Zoho invoice creation and instruct the user
         return redirect()->route('admin.orders.show', $order->id)
@@ -973,7 +994,7 @@ class OrderController extends Controller
         }
     }
 
-    public function sendOrderToZoho(Request $request, $order_number, $markPaid = true)
+    public function sendOrderToZoho(Request $request, $order_number, $markPaid = true, $submittedItems = null)
     {
 
 
@@ -981,6 +1002,26 @@ class OrderController extends Controller
         if (!$order) {
             // Handle the case where the order is not found
             return redirect()->back()->with('message', 'Order not found.');
+        }
+
+        // Accept submitted_items from POST (JSON) when the button/form sends them
+        if (empty($submittedItems)) {
+            $submittedItems = $request->input('submitted_items') ?? null;
+            if (is_string($submittedItems)) {
+                $decoded = json_decode($submittedItems, true);
+                if (json_last_error() === JSON_ERROR_NONE) {
+                    $submittedItems = $decoded;
+                }
+            }
+        }
+
+        try {
+            \Log::info('sendOrderToZoho called', [
+                'order_number' => $order_number,
+                'submitted_items_present' => !empty($submittedItems),
+            ]);
+        } catch (\Exception $e) {
+            // ignore logging errors
         }
 
         $order_id = $order->id;
@@ -993,28 +1034,74 @@ class OrderController extends Controller
         //  prx($shipping_amt);
         try {
             $cartData = [];
-            $lineItems = $order->lineItems;
-
             $total_price = 0;
-            foreach ($lineItems as $lineItem) {
-                $product = LineItem::where('line_items_id', $lineItem->line_items_id)->first();
 
-
-                if (!$product || !$product->sku) {
-                    $request->session()->flash('message', 'Error: Zoho SKU not added for product id.');
-                    return redirect('admin/orders/' . $order_id);
+            // If the UI submitted items (from the create form), prefer those so we can include per-item tax_id
+            if (!empty($submittedItems) && is_array($submittedItems)) {
+                foreach ($submittedItems as $it) {
+                    $qty = intval($it['quantity'] ?? 1);
+                    $price = floatval($it['price'] ?? 0);
+                    $total_price += $price * $qty;
+                    $cartData[] = (object)[
+                        'qty' => $qty,
+                        'item_id' => $it['sku'] ?? ($it['variant_id'] ?? null),
+                        'price' => $price,
+                        'title' => $it['title'] ?? null,
+                        'tax_id' => $it['tax_id'] ?? null,
+                    ];
                 }
+            } else {
+                $lineItems = $order->lineItems;
+                foreach ($lineItems as $lineItem) {
+                    $product = LineItem::where('line_items_id', $lineItem->line_items_id)->first();
+                    if (!$product || !$product->sku) {
+                        $request->session()->flash('message', 'Error: Zoho SKU not added for product id.');
+                        return redirect('admin/orders/' . $order_id);
+                    }
+                    // Add to total price
+                    $total_price += $lineItem->price * $lineItem->quantity;
 
-                // Add to total price
-                $total_price += $lineItem->price * $lineItem->quantity;
+                    // Attempt to resolve a Zoho tax_id for this SKU (do not persist to DB)
+                    $resolvedTaxId = null;
+                    try {
+                        $zohoItem = \App\Http\Controllers\ZohoController::findItemBySKU($product->sku);
+                        if (!empty($zohoItem) && !empty($zohoItem['item_tax_preferences']) && is_array($zohoItem['item_tax_preferences'])) {
+                            // prefer first available tax_id from item_tax_preferences
+                            $first = $zohoItem['item_tax_preferences'][0] ?? null;
+                            if (!empty($first['tax_id'])) {
+                                $resolvedTaxId = $first['tax_id'];
+                            }
+                        }
+                    } catch (\Exception $e) {
+                        // ignore resolution errors; fallback to null
+                        \Log::warning('Could not resolve Zoho item tax for SKU ' . ($product->sku ?? '')); 
+                    }
 
-                // Prepare cart data for future use
-                $cartData[] = (object)[
-                    'qty' => $lineItem->quantity,
-                    'item_id' => $product->sku,
-                    'price' => $lineItem->price,
-                    'title' => $product->title,
-                ];
+                    // Prefer DB-stored tax_id if available, otherwise use resolved tax_id
+                    $dbTaxId = $product->tax_id ?? null;
+                    $usedTaxId = $dbTaxId ?: $resolvedTaxId;
+                    try {
+                        \Log::info('Line item tax selection', [
+                            'order_number' => $order_number,
+                            'line_items_id' => $product->line_items_id ?? null,
+                            'sku' => $product->sku ?? null,
+                            'dbTaxId' => $dbTaxId,
+                            'resolvedTaxId' => $resolvedTaxId,
+                            'usedTaxId' => $usedTaxId,
+                        ]);
+                    } catch (\Exception $e) {
+                        // ignore logging errors
+                    }
+
+                    // Prepare cart data for future use (include used tax_id if any)
+                    $cartData[] = (object)[
+                        'qty' => $lineItem->quantity,
+                        'item_id' => $product->sku,
+                        'price' => $lineItem->price,
+                        'title' => $product->title,
+                        'tax_id' => $usedTaxId,
+                    ];
+                }
             }
             // $address = ShippingAddress::where('order_id', $order_id)->first();
             $address = BillingAddress::where('order_id', $order_id)->first();
@@ -1038,13 +1125,54 @@ class OrderController extends Controller
                 // ignore logging errors
             }
 
-            $res = ZohoController::createInvoice($customerFromZoho, $cartData, $promo_code_amount, $shipping_amt, $addressPost, $order_number, $markPaid);
-            // dd($res);
-        } catch (\Exception $error) {
-            dd($error);
-            logger()->error($error->getMessage());
-        }
+            try {
+                \Log::info('Zoho createInvoice payload', [
+                    'order_number' => $order_number,
+                    'cartData' => $cartData,
+                    'discount' => $promo_code_amount,
+                    'shipping' => $shipping_amt,
+                    'markPaid' => $markPaid,
+                ]);
+            } catch (\Exception $e) {
+                // ignore logging errors
+            }
 
+            try {
+                $res = ZohoController::createInvoice($customerFromZoho, $cartData, $promo_code_amount, $shipping_amt, $addressPost, $order_number, $markPaid);
+            } catch (\Exception $error) {
+                // Log full error for debugging
+                try {
+                    logger()->error('sendOrderToZoho - createInvoice failed', ['order_number' => $order_number, 'error' => $error->getMessage(), 'trace' => $error->getTraceAsString()]);
+                } catch (\Exception $_) {
+                    // ignore logging errors
+                }
+
+                // Try to extract JSON body if present in message
+                $msg = $error->getMessage();
+                $userMsg = $msg;
+                if (($pos = strpos($msg, '{')) !== false) {
+                    $jsonPart = substr($msg, $pos);
+                    $decoded = json_decode($jsonPart, true);
+                    if (json_last_error() === JSON_ERROR_NONE) {
+                        $userMsg = $decoded['message'] ?? json_encode($decoded);
+                    }
+                }
+
+                // user-friendly flash and redirect back to order page
+                $request->session()->flash('error', 'Zoho invoice creation failed: ' . $userMsg);
+                return redirect('admin/orders/' . $order_id);
+            }
+
+        } catch (\Exception $e) {
+            // Outer try-catch: log and show friendly error
+            try {
+                logger()->error('sendOrderToZoho - outer exception', ['order_number' => $order_number, 'error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            } catch (\Exception $_) {
+                // ignore logging errors
+            }
+            $request->session()->flash('error', 'Zoho invoice creation failed: ' . $e->getMessage());
+            return redirect('admin/orders/' . $order_id);
+        }
 
         $request->session()->flash('message', 'Invoice Generated in Zoho');
         return redirect('admin/orders/' . $order_id);

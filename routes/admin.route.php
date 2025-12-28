@@ -18,7 +18,7 @@ Route::get('/run-shopify-orders', function () {
     Artisan::call('fetch:shopify-orders');
     return 'Shopify orders fetched successfully!';
 });
-Route::get('/tax-id/{rate}', [ZohoController::class, 'getTaxIdByRateRoute']);
+    Route::get('/tax-id/{rate}', [ZohoController::class, 'getTaxIdByRateRoute']);
 // Route::get('/zoho/branches', function () {
 //     $branches = ZohoController::getBranches();
 //     return response()->json($branches);
@@ -48,6 +48,8 @@ Route::middleware(['admin.auth'])->group(function () {
     Route::get('/orders/list', [OrderController::class, 'list'])->name('orders.list');
     Route::get('/orders/list-test', [OrderController::class, 'listTest'])->name('orders.list.test');
     Route::get('/orders/create', [OrderController::class, 'create'])->name('orders.create');
+    // Zoho taxes endpoint for admin UI
+    Route::get('/zoho/taxes', [\App\Http\Controllers\ZohoController::class, 'getTaxes'])->name('zoho.taxes');
     Route::post('/orders/create', [OrderController::class, 'store'])->name('orders.store');
     Route::get('/orders_update', [ShopifyController::class, 'fetchOrders']);
     Route::get('orders/{order}', [OrderController::class, 'show'])->name('orders.show');
@@ -55,6 +57,8 @@ Route::middleware(['admin.auth'])->group(function () {
 
     Route::get('create-zoho-order/{id}', [OrderController::class, 'sendOrderToZoho'])->name('create.zoho.order');
 
+    // POST route that accepts submitted items payload (used by JS form to include per-item tax_id)
+    Route::post('create-zoho-order/{id}', [OrderController::class, 'sendOrderToZoho'])->name('create.zoho.order.post');
     // multiorders
     Route::post('/orders/create-zoho-orders', [OrderController::class, 'createOrdersInZoho'])->name('orders.create.zoho');
 
