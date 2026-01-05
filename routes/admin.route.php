@@ -53,9 +53,12 @@ Route::middleware(['admin.auth'])->group(function () {
     Route::post('/orders/create', [OrderController::class, 'store'])->name('orders.store');
     Route::get('/orders_update', [ShopifyController::class, 'fetchOrders']);
     Route::get('orders/{order}', [OrderController::class, 'show'])->name('orders.show');
+    Route::get('orders/{order}/edit', [OrderController::class, 'edit'])->name('orders.edit');
+    Route::put('orders/{order}', [OrderController::class, 'update'])->name('orders.update');
     Route::post('orders/{order}/fulfill', [OrderController::class, 'fulfillOrder'])->name('orders.fulfill');
 
     Route::get('create-zoho-order/{id}', [OrderController::class, 'sendOrderToZoho'])->name('create.zoho.order');
+    Route::get('approve-order/{id}', [OrderController::class, 'approveOrder'])->name('approve.order');
 
     // POST route that accepts submitted items payload (used by JS form to include per-item tax_id)
     Route::post('create-zoho-order/{id}', [OrderController::class, 'sendOrderToZoho'])->name('create.zoho.order.post');

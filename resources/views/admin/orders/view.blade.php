@@ -79,6 +79,9 @@
 
             <!--begin::Actions-->
             <div class="d-flex align-self-center flex-center flex-shrink-0">
+                <a href="{{ route('admin.orders.edit', $order->id) }}" class="btn btn-sm btn-light-primary d-flex flex-center ms-3 px-4 py-3">
+                    <span>Edit Order</span>
+                </a>
                 @if($order->fulfillment_status !== 'fulfilled')
     <form action="{{ route('admin.orders.fulfill', $order->id) }}" method="POST" style="display:inline;">
         @csrf
@@ -101,9 +104,15 @@
                 <span class="btn btn-sm btn-primary d-flex flex-center ms-3 px-4 py-3">
                     <span><a href="{{ route('admin.create.zoho.order', $order->order_number) }}" class="text-white text-hover-black">Create Zoho Order</span></a>
                 </span>
+                <span class="btn btn-sm btn-warning d-flex flex-center ms-3 px-4 py-3">
+                    <span><a href="{{ route('admin.approve.order', $order->order_number) }}" class="text-white text-hover-black">Approve Order</span></a>
+                </span>
                 @else($order->financial_status === 'refunded')
                 <span class="btn btn-sm btn-primary d-flex flex-center ms-3 px-4 py-3">
                     <span><a href="{{ route('admin.create.zoho.order', $order->order_number) }}" class="text-white text-hover-black">Create Zoho Order</span></a>
+                </span>
+                <span class="btn btn-sm btn-warning d-flex flex-center ms-3 px-4 py-3">
+                    <span><a href="{{ route('admin.approve.order', $order->order_number) }}" class="text-white text-hover-black">Approve Order</span></a>
                 </span>
                 <form action="{{ route('admin.orders.createCreditNote', $order->id) }}" method="POST">
                     @csrf

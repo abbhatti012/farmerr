@@ -179,6 +179,7 @@
                             <th class=" min-w-">Payment Status</th>
                             <th class=" min-w-">Amount</th>
                             <th class=" min-w-">Destination</th>
+                            <th class=" min-w-">Actions</th>
                             <!-- <th class=" min-w-">Tags</th> -->
                         </tr>
                     </thead>
@@ -241,6 +242,14 @@
                                 @else
                                 {{ $val->billingAddress->address1 ?? '' }}, {{ $val->billingAddress->city ?? '' }}, {{ $val->billingAddress->province ?? '' }}
                                 @endif
+                            </td>
+                            <td class="text-center">
+                                <a href="{{ route('admin.orders.show', $val->id) }}" class="btn btn-sm btn-light-primary me-2" title="View">
+                                    <i class="ki-outline ki-eye fs-3"></i>
+                                </a>
+                                <a href="{{ route('admin.orders.edit', $val->id) }}" class="btn btn-sm btn-light-success" title="Edit">
+                                    <i class="ki-outline ki-pencil fs-3"></i>
+                                </a>
                             </td>
                             <!-- <td>{{$val->tags}}</td> -->
                         </tr>

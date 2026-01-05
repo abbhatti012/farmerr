@@ -1177,6 +1177,12 @@ class OrderController extends Controller
         $request->session()->flash('message', 'Invoice Generated in Zoho');
         return redirect('admin/orders/' . $order_id);
     }
+    
+    public function approveOrder(Request $request, $order_number)
+    {
+        return $this->sendOrderToZoho($request, $order_number, false);
+    }
+    
     public function createCreditNoteForRefund($orderId)
     {
         // dd($orderId);
@@ -1394,5 +1400,269 @@ class OrderController extends Controller
             'message' => 'JSON file exported successfully.',
             'json_file' => asset('storage/' . $jsonFileName),
         ]);
+    }
+    
+    public function edit($orderId)
+    {
+        $order = Order::with(['customer', 'billingAddress', 'shippingAddress', 'lineItems'])->findOrFail($orderId);
+        
+        // Load product variants for the product dropdown in the order form
+        $variants = \App\Models\ProductVariant::with('product')->whereNotNull('sku')->get();
+        
+        // Try to fetch Zoho taxes server-side so the form can render tax dropdowns immediately
+        $zohoTaxes = [];
+        try {
+            $zohoTaxes = \Cache::remember('zoho_org_taxes_list', 300, function () {
+                $client = new \GuzzleHttp\Client();
+                $resp = $client->get('https://www.zohoapis.com/books/v3/settings/taxes', [
+                    'headers' => ['Authorization' => 'Zoho-oauthtoken ' . \App\Http\Controllers\ZohoController::generateToken()],
+                    'query' => ['organization_id' => env('ZOHO_API_ORGANIZATION_ID')],
+                ]);
+                $body = json_decode($resp->getBody()->getContents(), true);
+                return $body['taxes'] ?? [];
+            });
+        } catch (\Exception $e) {
+            \Log::warning('Could not load Zoho taxes in admin edit view: ' . $e->getMessage());
+            $zohoTaxes = [];
+        }
+        
+        // Fetch templates from Gupshup for the message functionality
+        $raw = $this->gupshup->getTemplates();
+
+        // Gupshup returns: ["status" => "...", "templates" => [ ... ]]
+        $tplList = $raw['templates'] ?? [];   // <<< IMPORTANT
+
+        $allowedTemplates = [/* keep empty to allow all approved */];
+
+        $processedTemplates = collect($tplList)
+            ->map(function ($tpl) {
+                // meta can be a JSON string; decode safely
+                $meta = $tpl['meta'] ?? null;
+                if (is_string($meta)) {
+                    $decoded = json_decode($meta, true);
+                    if (json_last_error() === JSON_ERROR_NONE) {
+                        $meta = $decoded;
+                    } else {
+                        $meta = null;
+                    }
+                }
+
+                // Try to extract a nice sample/preview
+                $sample = $meta['example'] ?? null;
+                if (!$sample) {
+                    // fallbacks: "data" or "containerMeta" (which can also be a JSON string)
+                    $sample = $tpl['data'] ?? '';
+                    if (!$sample && !empty($tpl['containerMeta'])) {
+                        $cm = $tpl['containerMeta'];
+                        if (is_string($cm)) {
+                            $cm = json_decode($cm, true);
+                        }
+                        if (is_array($cm) && !empty($cm['data'])) {
+                            $sample = $cm['data'];
+                        }
+                    }
+                }
+
+                return [
+                    'id'           => $tpl['id'] ?? null,
+                    'tempId'           => $tpl['externalId'] ?? null,
+                    'templateName' => $tpl['elementName'] ?? ($tpl['name'] ?? 'Unnamed'),
+                    'status'       => $tpl['status'] ?? null,
+                    'language'     => $tpl['languageCode'] ?? ($tpl['language'] ?? null),
+                    'category'     => $tpl['category'] ?? ($tpl['oldCategory'] ?? null),
+                    'sampleText'   => trim((string)$sample),
+                ];
+            })
+            ->filter(function ($t) use ($allowedTemplates) {
+                if (strtoupper((string)$t['status']) !== 'APPROVED') return false;
+                if ($allowedTemplates && !in_array($t['templateName'], $allowedTemplates, true)) return false;
+                return !empty($t['id']);
+            })
+            ->values();
+        $processedTemplates = $processedTemplates
+            ->filter(function ($t) {
+                return strtoupper((string)($t['category'] ?? '')) === 'UTILITY';
+            })
+            ->reject(function ($t) {
+                $name = strtolower($t['templateName'] ?? $t['elementName'] ?? $t['name'] ?? '');
+                return preg_match('/^test($|[\s._-])/i', $name)
+                    || strpos($name, 'greview_delhi') !== false;
+            })
+            ->values();
+
+        return view('admin.orders.edit', [
+            'order' => $order,
+            'variants' => $variants,
+            'zohoTaxes' => $zohoTaxes,
+            'templates' => $processedTemplates,
+        ]);
+    }
+    
+    public function update(Request $request, $orderId)
+    {
+        $order = Order::findOrFail($orderId);
+        
+        $validated = $request->validate([
+            'customer_first_name' => 'required|string|max:255',
+            'customer_last_name' => 'required|string|max:255',
+            'billing_name' => 'required|string|max:255',
+            'phone' => 'required|string|max:32',
+            'email' => 'required|email|max:255',
+
+            'billing_address1' => 'required|string',
+            'billing_city' => 'required|string',
+            'billing_province' => 'required|string',
+            'billing_country' => 'required|string',
+            'billing_country_code' => 'nullable|string',
+
+            'shipping_address1' => 'required|string',
+            'shipping_city' => 'required|string',
+            'shipping_province' => 'required|string',
+            'shipping_country' => 'required|string',
+            'shipping_country_code' => 'nullable|string',
+
+            'payment_type' => 'required|string',
+            'order_type' => 'required|string',
+            'delivery_time_slot' => 'required|string',
+            'delivery_date' => 'required|date',
+            'order_date' => 'required|date',
+            'order_notes' => 'required|string',
+            'order_channel' => 'required|string',
+            // pricing & status
+            'subtotal_price' => 'nullable|numeric',
+            'total_tax' => 'nullable|numeric',
+            'total_shipping_price' => 'nullable|numeric',
+            'total_discounts' => 'nullable|numeric',
+            'total_line_items_price' => 'nullable|numeric',
+            'total_price' => 'nullable|numeric',
+            'currency' => 'nullable|string',
+            'fulfillment_status' => 'nullable|string',
+            'buyer_accepts_marketing' => 'nullable',
+            'confirmed' => 'nullable',
+            'contact_email' => 'nullable|email',
+            'tags' => 'nullable|string',
+            'financial_status' => 'required|in:pending,paid,refunded,partially_refunded',
+            // line items
+            'items' => 'nullable|array',
+            'items.*.product_id' => 'required_with:items|integer',
+            'items.*.variant_id' => 'required_with:items|integer',
+            'items.*.sku' => 'required_with:items|string',
+            'items.*.price' => 'required_with:items|numeric',
+            'items.*.quantity' => 'required_with:items|integer|min:1',
+            'items.*.title' => 'nullable|string',
+            'items.*.tax_id' => 'nullable|string',
+        ]);
+        
+        // Update the main order
+        $order->update([
+            'order_date' => $validated['order_date'],
+            'email' => $validated['email'],
+            'phone' => $validated['phone'],
+            'financial_status' => $validated['financial_status'],
+            'delivery_date' => $validated['delivery_date'],
+            'note' => $validated['order_notes'],
+            'occasion' => $validated['order_type'] ?? null,
+            // pricing & status
+            'subtotal_price' => $validated['subtotal_price'] ?? 0,
+            'total_tax' => $validated['total_tax'] ?? 0,
+            'total_shipping_price' => $validated['total_shipping_price'] ?? 0,
+            'total_discounts' => $validated['total_discounts'] ?? 0,
+            'total_line_items_price' => $validated['total_line_items_price'] ?? 0,
+            'total_price' => $validated['total_price'] ?? ($validated['subtotal_price'] ?? 0),
+            'currency' => $validated['currency'] ?? 'INR',
+            'fulfillment_status' => $validated['fulfillment_status'] ?? 'unfulfilled',
+            'buyer_accepts_marketing' => isset($validated['buyer_accepts_marketing']) ? 1 : 0,
+            'confirmed' => isset($validated['confirmed']) ? 1 : 0,
+            'contact_email' => $validated['contact_email'] ?? null,
+            'tags' => $validated['tags'] ?? null,
+        ]);
+        
+        // Update customer
+        $customer = $order->customer;
+        if ($customer) {
+            $customer->update([
+                'first_name' => $validated['customer_first_name'],
+                'last_name' => $validated['customer_last_name'],
+                'email' => $validated['email'],
+                'phone' => $validated['phone'],
+            ]);
+        }
+        
+        // Update billing address
+        $billingAddress = $order->billingAddress;
+        if ($billingAddress) {
+            $billingAddress->update([
+                'first_name' => $validated['customer_first_name'],
+                'last_name' => $validated['customer_last_name'],
+                'address1' => $validated['billing_address1'],
+                'city' => $validated['billing_city'],
+                'province' => $validated['billing_province'],
+                'country' => $validated['billing_country'],
+                'country_code' => $validated['billing_country_code'] ?? 'IN',
+                'phone' => $validated['phone'],
+                'name' => $validated['customer_first_name'].' '.$validated['customer_last_name'],
+            ]);
+        }
+        
+        // Update shipping address
+        $shippingAddress = $order->shippingAddress;
+        if ($shippingAddress) {
+            $shippingAddress->update([
+                'first_name' => $validated['customer_first_name'],
+                'last_name' => $validated['customer_last_name'],
+                'address1' => $validated['shipping_address1'],
+                'city' => $validated['shipping_city'],
+                'province' => $validated['shipping_province'],
+                'country' => $validated['shipping_country'],
+                'country_code' => $validated['shipping_country_code'] ?? 'IN',
+                'phone' => $validated['phone'],
+                'name' => $validated['customer_first_name'].' '.$validated['customer_last_name'],
+            ]);
+        }
+        
+        // Update line items if provided
+        if (!empty($validated['items']) && is_array($validated['items'])) {
+            // First delete existing line items
+            $order->lineItems()->delete();
+            
+            foreach ($validated['items'] as $idx => $it) {
+                try {
+                    // Determine a safe line_items_id. Existing values may be numeric or custom strings.
+                    $lastLineItem = LineItem::orderBy('id', 'desc')->first();
+                    if ($lastLineItem && is_numeric($lastLineItem->line_items_id)) {
+                        $lineItemsId = $lastLineItem->line_items_id + 1;
+                    } else {
+                        // fallback to a manual identifier to avoid NULL constraints
+                        $lineItemsId = 'manual-' . $order->id . '-' . ($idx + 1);
+                    }
+
+                    LineItem::create([
+                        'order_id' => $order->id,
+                        'product_id' => $it['product_id'] ?? null,
+                        'line_items_id' => $lineItemsId,
+                        'variant_id' => $it['variant_id'] ?? null,
+                        'quantity' => $it['quantity'] ?? 1,
+                        'price' => $it['price'] ?? 0,
+                        'total_discount' => 0,
+                        'name' => $it['title'] ?? null,
+                        'sku' => $it['sku'] ?? null,
+                        'fulfillment_status' => 'unfulfilled',
+                        'requires_shipping' => 1,
+                        'taxable' => 1,
+                        'tax_id' => $it['tax_id'] ?? null,
+                        'title' => $it['title'] ?? null,
+                    ]);
+                } catch (\Exception $e) {
+                    \Log::error('Failed to update line item for order', [
+                        'order_id' => $order->id,
+                        'item' => $it,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+        }
+        
+        return redirect()->route('admin.orders.show', $order->id)
+            ->with('success', 'Order updated successfully');
     }
 }
