@@ -435,6 +435,7 @@ class OrderController extends Controller
             'order_date' => 'required|date',
             'order_notes' => 'required|string',
             'order_channel' => 'required|string',
+            'description' => 'nullable|string',
             // pricing & status
             'subtotal_price' => 'nullable|numeric',
             'total_tax' => 'nullable|numeric',
@@ -459,6 +460,18 @@ class OrderController extends Controller
             'items.*.tax_id' => 'nullable|string',
         ]);
 
+        // Validate that either description or items are provided, but not both
+        $hasDescription = !empty($validated['description']);
+        $hasItems = !empty($validated['items']) && is_array($validated['items']);
+        
+        if (!$hasDescription && !$hasItems) {
+            return back()->withErrors(['description' => 'Please provide either a description or line items.'])->withInput();
+        }
+        
+        if ($hasDescription && $hasItems) {
+            return back()->withErrors(['description' => 'Please provide either a description or line items, not both.'])->withInput();
+        }
+
         // Create order
         $order = Order::create([
             'order_date' => $validated['order_date'],
@@ -469,6 +482,7 @@ class OrderController extends Controller
             'financial_status' => 'pending',
             'delivery_date' => $validated['delivery_date'],
             'note' => $validated['order_notes'],
+            'description' => $validated['description'] ?? null,
             'occasion' => $validated['order_type'] ?? null,
             // pricing & status
             'subtotal_price' => $validated['subtotal_price'] ?? 0,
@@ -523,7 +537,7 @@ class OrderController extends Controller
         ]);
     
         // Create line items if provided
-        if (!empty($validated['items']) && is_array($validated['items'])) {
+        if ($hasItems) {
             // Log the incoming items payload for debugging
             try {
                 Log::info('ManualOrderItemsPayload', ['order_id' => $order->id, 'items' => $validated['items']]);
@@ -580,7 +594,7 @@ class OrderController extends Controller
                 }
             }
         } else {
-            Log::info('No line items provided for manual order', ['order_id' => $order->id]);
+            Log::info('Order created with description only', ['order_id' => $order->id, 'description' => $validated['description']]);
         }
 
         // If the order has line items, attempt to create an invoice in Zoho automatically.
@@ -1036,8 +1050,27 @@ class OrderController extends Controller
             $cartData = [];
             $total_price = 0;
 
+            // Check if order has description instead of line items
+            if (!empty($order->description) && $order->lineItems->isEmpty()) {
+                // Validate that description order has a valid price
+                $orderPrice = $order->total_price ?? 0;
+                if ($orderPrice <= 0) {
+                    $request->session()->flash('error', 'Description orders must have a valid price greater than 0. Please edit the order and set the total price.');
+                    return redirect('admin/orders/' . $order_id);
+                }
+                
+                // Use hardcoded details for description-only orders
+                $cartData[] = (object)[
+                    'qty' => 1,
+                    'item_id' => 'MISC-SERVICE', // Hardcoded SKU for misc services
+                    'price' => $orderPrice,
+                    'title' => 'Miscellaneous Service - ' . substr($order->description, 0, 100),
+                    'tax_id' => null, // Use default tax
+                ];
+                $total_price = $orderPrice;
+            }
             // If the UI submitted items (from the create form), prefer those so we can include per-item tax_id
-            if (!empty($submittedItems) && is_array($submittedItems)) {
+            elseif (!empty($submittedItems) && is_array($submittedItems)) {
                 foreach ($submittedItems as $it) {
                     $qty = intval($it['quantity'] ?? 1);
                     $price = floatval($it['price'] ?? 0);
@@ -1052,6 +1085,11 @@ class OrderController extends Controller
                 }
             } else {
                 $lineItems = $order->lineItems;
+                if ($lineItems->isEmpty()) {
+                    $request->session()->flash('error', 'Order has no line items or description. Please add items or description before sending to Zoho.');
+                    return redirect('admin/orders/' . $order_id);
+                }
+                
                 foreach ($lineItems as $lineItem) {
                     $product = LineItem::where('line_items_id', $lineItem->line_items_id)->first();
                     if (!$product || !$product->sku) {
@@ -1528,6 +1566,7 @@ class OrderController extends Controller
             'order_date' => 'required|date',
             'order_notes' => 'required|string',
             'order_channel' => 'required|string',
+            'description' => 'nullable|string',
             // pricing & status
             'subtotal_price' => 'nullable|numeric',
             'total_tax' => 'nullable|numeric',
@@ -1552,6 +1591,18 @@ class OrderController extends Controller
             'items.*.title' => 'nullable|string',
             'items.*.tax_id' => 'nullable|string',
         ]);
+
+        // Validate that either description or items are provided, but not both
+        $hasDescription = !empty($validated['description']);
+        $hasItems = !empty($validated['items']) && is_array($validated['items']);
+        
+        if (!$hasDescription && !$hasItems) {
+            return back()->withErrors(['description' => 'Please provide either a description or line items.'])->withInput();
+        }
+        
+        if ($hasDescription && $hasItems) {
+            return back()->withErrors(['description' => 'Please provide either a description or line items, not both.'])->withInput();
+        }
         
         // Update the main order
         $order->update([
@@ -1561,6 +1612,7 @@ class OrderController extends Controller
             'financial_status' => $validated['financial_status'],
             'delivery_date' => $validated['delivery_date'],
             'note' => $validated['order_notes'],
+            'description' => $validated['description'] ?? null,
             'occasion' => $validated['order_type'] ?? null,
             // pricing & status
             'subtotal_price' => $validated['subtotal_price'] ?? 0,

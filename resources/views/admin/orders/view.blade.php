@@ -629,92 +629,132 @@
 
                                     <!--begin::Card body-->
                                     <div class="card-body pt-0">
-                                        <div class="table-responsive">
-                                            <!--begin::Table-->
-                                            <table class="table align-middle table-row-dashed fs-6 gy-5 mb-0">
-                                                <thead>
-                                                    <tr class="text-start text-gray-500 fw-bold fs-7 text-uppercase gs-0">
-                                                        <th class="min-w-175px">Product</th>
-                                                        <th class="min-w-100px text-end">SKU</th>
-                                                        <th class="min-w-70px text-end">Qty</th>
-                                                        <th class="min-w-100px text-end">Unit Price</th>
-                                                        <th class="min-w-100px text-end">Total</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody class="fw-semibold text-gray-600">
-                                                    @php
-                                                    $total_price = 0;
-                                                    @endphp
-                                                    @foreach ($order->lineItems as $lineItem)
-                                                    @php
-
-                                                    $total_price += $lineItem->price * $lineItem->quantity;
-                                                    @endphp
-                                                    <tr>
-                                                        <td>
-                                                            <div class="d-flex align-items-center">
-                                                                <!--begin::Title-->
-                                                                <div class="">
-                                                                    <a href="#" class="fw-bold text-gray-600 text-hover-primary">{{ $lineItem->name }}</a>
-                                                                    <div class="fs-7 text-muted">Delivery Date: {{ $order->delivery_date ?? (@$order->noteAttributes->value ?? '—') }}</div>
+                                        @if($order->description && $order->lineItems->isEmpty())
+                                            {{-- Display description when no line items --}}
+                                            <div class="alert alert-info">
+                                                <h5><i class="ki-outline ki-information fs-2 me-2"></i>Order Description</h5>
+                                                <p class="mb-0">{{ $order->description }}</p>
+                                            </div>
+                                            <div class="table-responsive">
+                                                <table class="table align-middle table-row-dashed fs-6 gy-5 mb-0">
+                                                    <tbody class="fw-semibold text-gray-600">
+                                                        <tr>
+                                                            <td colspan="4" class="fs-3 text-gray-900 text-end">
+                                                                Total Amount
+                                                            </td>
+                                                            <td class="text-gray-900 fs-3 fw-bolder text-end">
+                                                                ₹{{ number_format($order->total_price ?? 0, 2) }}
+                                                            </td>
+                                                        </tr>
+                                                        @if($order->total_shipping_price > 0)
+                                                        <tr>
+                                                            <td colspan="4" class="text-end">
+                                                                Shipping
+                                                            </td>
+                                                            <td class="text-end">
+                                                                ₹{{ number_format($order->total_shipping_price, 2) }}
+                                                            </td>
+                                                        </tr>
+                                                        @endif
+                                                        <tr>
+                                                            <td colspan="4" class="fs-3 text-gray-900 text-end">
+                                                                Grand Total
+                                                            </td>
+                                                            <td class="text-gray-900 fs-3 fw-bolder text-end">
+                                                                ₹{{ number_format(($order->total_price ?? 0) + ($order->total_shipping_price ?? 0), 2) }}
+                                                            </td>
+                                                        </tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        @else
+                                            {{-- Display line items table --}}
+                                            <div class="table-responsive">
+                                                <!--begin::Table-->
+                                                <table class="table align-middle table-row-dashed fs-6 gy-5 mb-0">
+                                                    <thead>
+                                                        <tr class="text-start text-gray-500 fw-bold fs-7 text-uppercase gs-0">
+                                                            <th class="min-w-175px">Product</th>
+                                                            <th class="min-w-100px text-end">SKU</th>
+                                                            <th class="min-w-70px text-end">Qty</th>
+                                                            <th class="min-w-100px text-end">Unit Price</th>
+                                                            <th class="min-w-100px text-end">Total</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody class="fw-semibold text-gray-600">
+                                                        @php
+                                                        $total_price = 0;
+                                                        @endphp
+                                                        @foreach ($order->lineItems as $lineItem)
+                                                        @php
+                                                        $total_price += $lineItem->price * $lineItem->quantity;
+                                                        @endphp
+                                                        <tr>
+                                                            <td>
+                                                                <div class="d-flex align-items-center">
+                                                                    <!--begin::Title-->
+                                                                    <div class="">
+                                                                        <a href="#" class="fw-bold text-gray-600 text-hover-primary">{{ $lineItem->name }}</a>
+                                                                        <div class="fs-7 text-muted">Delivery Date: {{ $order->delivery_date ?? (@$order->noteAttributes->value ?? '—') }}</div>
+                                                                    </div>
+                                                                    <!--end::Title-->
                                                                 </div>
-                                                                <!--end::Title-->
-                                                            </div>
-                                                        </td>
-                                                        <td class="text-end">
-                                                            {{ $lineItem->sku }}
-                                                        </td>
-                                                        <td class="text-end">
-                                                            {{ $lineItem->quantity }} x {{ $lineItem->weight }}
-                                                        </td>
-                                                        <td class="text-end">
-                                                            ₹{{ number_format($lineItem->price, 2) }} x {{ $lineItem->quantity }}
-                                                        </td>
-                                                        <td class="text-end">
-                                                            ₹{{ number_format($lineItem->price * $lineItem->quantity, 2) }}
-                                                        </td>
-                                                    </tr>
-                                                    @endforeach
-                                                    <tr>
-                                                        <td colspan="3" class="text-end">
-                                                            Subtotal
-                                                        </td>
-                                                        <td class="text-end">
-                                                            {{ count($order->lineItems)}} Item
-                                                        </td>
-                                                        <td class="text-end">
-                                                            ₹{{ number_format($total_price) }}
-                                                        </td>
-                                                    </tr>
-                                                    <tr>
-                                                        <td colspan="4" class="text-end">
-                                                            Shipping <br>
-                                                            <p>{{ @$order->shippingLines->title }}</p>
-                                                        </td>
-                                                        <td class="text-end">
-                                                            ₹{{ number_format($order->total_shipping_price) }}
-                                                        </td>
-                                                    </tr>
-                                                    <tr>
-                                                        <td colspan="4" class="fs-3 text-gray-900 text-end">
-                                                            Grand Total
-                                                        </td>
-                                                        <td class="text-gray-900 fs-3 fw-bolder text-end">
-                                                            ₹{{ number_format($total_price + $order->total_shipping_price ) }}
-                                                        </td>
-                                                    </tr>
-                                                    <tr>
-                                                        <td colspan="4" class="fs-3 text-gray-900 text-end">
-                                                            Paid
-                                                        </td>
-                                                        <td class="text-gray-900 fs-3 fw-bolder text-end">
-                                                            ₹{{ number_format($order->total_price) }}
-                                                        </td>
-                                                    </tr>
-                                                </tbody>
-                                            </table>
-                                            <!--end::Table-->
-                                        </div>
+                                                            </td>
+                                                            <td class="text-end">
+                                                                {{ $lineItem->sku }}
+                                                            </td>
+                                                            <td class="text-end">
+                                                                {{ $lineItem->quantity }} x {{ $lineItem->weight }}
+                                                            </td>
+                                                            <td class="text-end">
+                                                                ₹{{ number_format($lineItem->price, 2) }} x {{ $lineItem->quantity }}
+                                                            </td>
+                                                            <td class="text-end">
+                                                                ₹{{ number_format($lineItem->price * $lineItem->quantity, 2) }}
+                                                            </td>
+                                                        </tr>
+                                                        @endforeach
+                                                        <tr>
+                                                            <td colspan="3" class="text-end">
+                                                                Subtotal
+                                                            </td>
+                                                            <td class="text-end">
+                                                                {{ count($order->lineItems)}} Item
+                                                            </td>
+                                                            <td class="text-end">
+                                                                ₹{{ number_format($total_price) }}
+                                                            </td>
+                                                        </tr>
+                                                        <tr>
+                                                            <td colspan="4" class="text-end">
+                                                                Shipping <br>
+                                                                <p>{{ @$order->shippingLines->title }}</p>
+                                                            </td>
+                                                            <td class="text-end">
+                                                                ₹{{ number_format($order->total_shipping_price) }}
+                                                            </td>
+                                                        </tr>
+                                                        <tr>
+                                                            <td colspan="4" class="fs-3 text-gray-900 text-end">
+                                                                Grand Total
+                                                            </td>
+                                                            <td class="text-gray-900 fs-3 fw-bolder text-end">
+                                                                ₹{{ number_format($total_price + $order->total_shipping_price ) }}
+                                                            </td>
+                                                        </tr>
+                                                        <tr>
+                                                            <td colspan="4" class="fs-3 text-gray-900 text-end">
+                                                                Paid
+                                                            </td>
+                                                            <td class="text-gray-900 fs-3 fw-bolder text-end">
+                                                                ₹{{ number_format($order->total_price) }}
+                                                            </td>
+                                                        </tr>
+                                                    </tbody>
+                                                </table>
+                                                <!--end::Table-->
+                                            </div>
+                                        @endif
                                     </div>
                                     <!--end::Card body-->
                                 </div>

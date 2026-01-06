@@ -16,6 +16,7 @@ class Order extends Model
         'tags',
         'note',
         'note_attributes',
+        'description',
         'email',
         'phone',
         'total_price',

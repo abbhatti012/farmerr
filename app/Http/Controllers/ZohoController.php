@@ -508,51 +508,75 @@ class ZohoController extends Controller
         // --- Build line items (respect any per-item tax_id supplied by the caller) ---
         $line_items = [];
         foreach ($cartData as $cart) {
-            $item = self::skuToItemId($cart->item_id);
+            // Check if this is a description-only order (MISC-SERVICE)
+            if ($cart->item_id === 'MISC-SERVICE') {
+                // Handle description orders without SKU lookup
+                $resolvedTaxId = !empty($cart->tax_id) ? $cart->tax_id : $taxId; // Use default tax
+                
+                \Log::info('Processing description order item', [
+                    'order_id' => $orderId,
+                    'title' => $cart->title,
+                    'price' => $cart->price,
+                    'qty' => $cart->qty,
+                    'tax_id' => $resolvedTaxId
+                ]);
+                
+                $line_items[] = [
+                    'name'       => $cart->title ?? 'Miscellaneous Service',
+                    'rate'       => $cart->price,
+                    'quantity'   => $cart->qty,
+                    'tax_id'     => $resolvedTaxId,
+                    'hsn_or_sac' => null, // No HSN/SAC for misc services
+                    // Don't include item_id for description orders - let Zoho create as text item
+                ];
+            } else {
+                // Regular product items - do SKU lookup
+                $item = self::skuToItemId($cart->item_id);
 
-            // If the caller provided an explicit Zoho tax_id for the item, use it
-            $resolvedTaxId = null;
-            if (!empty($cart->tax_id)) {
-                $resolvedTaxId = $cart->tax_id;
-            }
-
-            // If not supplied, fall back to existing resolution logic
-            if (!$resolvedTaxId) {
-                // Prefer item-level tax preferences returned by Zoho for the SKU
-                if (!empty($item['tax_by_specification']) && is_array($item['tax_by_specification'])) {
-                    $resolvedTaxId = self::selectTaxIdFromItemTaxPreferences($item['tax_by_specification'], $isInter);
+                // If the caller provided an explicit Zoho tax_id for the item, use it
+                $resolvedTaxId = null;
+                if (!empty($cart->tax_id)) {
+                    $resolvedTaxId = $cart->tax_id;
                 }
 
-                // If not resolved from item, try to match org taxes by percentage
+                // If not supplied, fall back to existing resolution logic
                 if (!$resolvedTaxId) {
-                    $taxPercentage = null;
-                    if (!empty($item['tax_by_specification'])) {
-                        foreach ($item['tax_by_specification'] as $spec => $meta) {
-                            if (!empty($meta['tax_percentage'])) {
-                                $taxPercentage = (float)$meta['tax_percentage'];
-                                break;
+                    // Prefer item-level tax preferences returned by Zoho for the SKU
+                    if (!empty($item['tax_by_specification']) && is_array($item['tax_by_specification'])) {
+                        $resolvedTaxId = self::selectTaxIdFromItemTaxPreferences($item['tax_by_specification'], $isInter);
+                    }
+
+                    // If not resolved from item, try to match org taxes by percentage
+                    if (!$resolvedTaxId) {
+                        $taxPercentage = null;
+                        if (!empty($item['tax_by_specification'])) {
+                            foreach ($item['tax_by_specification'] as $spec => $meta) {
+                                if (!empty($meta['tax_percentage'])) {
+                                    $taxPercentage = (float)$meta['tax_percentage'];
+                                    break;
+                                }
                             }
                         }
+                        if ($taxPercentage !== null) {
+                            $resolvedTaxId = self::findOrgTaxIdByPercentage($taxPercentage);
+                        }
                     }
-                    if ($taxPercentage !== null) {
-                        $resolvedTaxId = self::findOrgTaxIdByPercentage($taxPercentage);
+
+                    // final fallback to configured zero-tax id
+                    if (!$resolvedTaxId) {
+                        $resolvedTaxId = $taxId;
                     }
                 }
 
-                // final fallback to configured zero-tax id
-                if (!$resolvedTaxId) {
-                    $resolvedTaxId = $taxId;
-                }
+                $line_items[] = [
+                    'name'       => $item['item_name'],
+                    'rate'       => $cart->price,
+                    'quantity'   => $cart->qty,
+                    'item_id'    => $item['item_id'],
+                    'tax_id'     => $resolvedTaxId,
+                    'hsn_or_sac' => $item['hsn_or_sac'],
+                ];
             }
-
-            $line_items[] = [
-                'name'     => $item['item_name'],
-                'rate'     => $cart->price,
-                'quantity' => $cart->qty,
-                'item_id'  => $item['item_id'],
-                'tax_id'   => $resolvedTaxId,
-                'hsn_or_sac' => $item['hsn_or_sac'],
-            ];
         }
         // For shipping, prefer using Zoho's `shipping_charge` field so it appears as shipping
         // in the invoice summary. Keep shipping item fallback commented for traceability.
@@ -567,16 +591,30 @@ class ZohoController extends Controller
         }
 
         try {
+            // Calculate subtotal from line items
+            $subtotal = 0;
+            foreach ($line_items as $item) {
+                $subtotal += ($item['rate'] * $item['quantity']);
+            }
+
             // Ensure numeric discount
             $discount = is_null($discount) ? 0 : (float)$discount;
+            
+            // Validate discount: don't apply if subtotal is zero or negative, or if discount is zero/negative
+            $applyDiscount = ($subtotal > 0 && $discount > 0);
+            
+            \Log::info('Zoho invoice discount validation', [
+                'order_id' => $orderId,
+                'subtotal' => $subtotal,
+                'discount' => $discount,
+                'apply_discount' => $applyDiscount
+            ]);
 
             $payload = [
                 'customer_id'      => $customer->contact_id,
                 'location_id'      => $locationId,
                 'line_items'       => $line_items,
                 'description'      => 'Invoice generated by API',
-                'discount'         => $discount,
-                'discount_type'    => 'entity_level',
                 // explicit shipping fields so Zoho displays shipping separately
                 'shipping_charge'  => $shipping_charge,
                 'shipping_charge_tax_id' => $shipping_charge > 0 ? $taxId : null,
@@ -587,6 +625,12 @@ class ZohoController extends Controller
                 'gst_no'           => $sellerGst, // seller branch’s GSTIN
                 'series_name'      => $seriesName,
             ];
+
+            // Only add discount fields if discount should be applied
+            if ($applyDiscount) {
+                $payload['discount'] = $discount;
+                $payload['discount_type'] = 'entity_level';
+            }
 
             // Only set status 'paid' when caller requests marking paid. For manual orders we keep draft/unpaid.
             if ($markPaid) {

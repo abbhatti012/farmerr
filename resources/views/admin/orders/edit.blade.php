@@ -140,71 +140,93 @@
             </div>
 
             <div class="col-12 mt-4">
-                <h5>Add Line Items</h5>
+                <h5>Add Line Items or Description</h5>
+                <div class="mb-3">
+                    <button type="button" id="addDescriptionBtn" class="btn btn-outline-primary me-2" {{ $order->description ? 'disabled' : '' }}>
+                        {{ $order->description ? 'Description Added' : 'Add Description' }}
+                    </button>
+                    <small class="text-muted">Choose either line items or description (not both). Description is useful when you don't have specific products to add.</small>
+                </div>
             </div>
 
-            <div class="col-md-6 mb-3">
-                <label class="form-label">Product Variant</label>
-                <select id="variantSelect" class="form-select">
-                    <option value="">Choose product variant</option>
-                    @foreach($variants as $v)
-                        <option value="{{ $v->id }}" data-product_id="{{ $v->product_id }}" data-sku="{{ $v->sku }}" data-price="{{ $v->price }}" data-title="{{ $v->title }}" data-product_title="{{ $v->product->title ?? '' }}">{{ $v->product->title ?? 'Product' }} — {{ $v->title }} ({{ $v->sku }})</option>
-                    @endforeach
-                </select>
-            </div>
-            <div class="col-md-3 mb-3">
-                <label class="form-label">Quantity</label>
-                <input type="number" id="variantQty" class="form-control" value="1" min="1" />
-            </div>
-            <div class="col-md-3 mb-3 d-flex align-items-end">
-                <button type="button" id="addItemBtn" class="btn btn-secondary">Add Item</button>
+            <!-- Description Section -->
+            <div id="descriptionSection" class="col-12 mb-3" style="display: {{ $order->description ? 'block' : 'none' }};">
+                @if($order->description)
+                <div class="alert alert-info">
+                    <strong>Description Order:</strong> This order uses a custom description. 
+                    Make sure the <strong>Grand Total (Paid)</strong> amount is set correctly in the pricing section below.
+                </div>
+                @endif
+                <label class="form-label">Order Description *</label>
+                <textarea name="description" id="descriptionTextarea" class="form-control" rows="4" placeholder="Enter order description..." {{ $order->description ? 'required' : '' }}>{{ old('description', $order->description ?? '') }}</textarea>
+                <button type="button" id="removeDescriptionBtn" class="btn btn-sm btn-danger mt-2">Remove Description</button>
             </div>
 
-            <div class="col-12">
-                <table class="table table-sm" id="itemsTable">
-                    <thead>
-                        <tr>
-                            <th>Product</th>
-                            <th>Tax</th>
-                            <th>Variant</th>
-                            <th>SKU</th>
-                            <th class="text-end">Price</th>
-                            <th class="text-end">Qty</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach($order->lineItems as $index => $lineItem)
-                        <tr>
-                            <td>{{ $lineItem->name ?? 'N/A' }}</td>
-                            <td>
-                                <select class="form-select form-select-sm tax-select" name="items[{{ $index }}][tax_id]">
-                                    <option value="">Default</option>
-                                    @foreach($zohoTaxes as $tax)
-                                        <option value="{{ $tax['tax_id'] ?? $tax['id'] }}" 
-                                            {{ ($lineItem->tax_id ?? '') == ($tax['tax_id'] ?? $tax['id']) ? 'selected' : '' }}>
-                                            {{ $tax['tax_name'] ?? $tax['name'] }} ({{ $tax['tax_percentage'] ?? $tax['tax_percentage'] }}%)
-                                        </option>
-                                    @endforeach
-                                </select>
-                            </td>
-                            <td>{{ $lineItem->title ?? 'N/A' }}</td>
-                            <td>{{ $lineItem->sku ?? 'N/A' }}</td>
-                            <td class="text-end">{{ $lineItem->price }}
-                                <input type="hidden" name="items[{{ $index }}][price]" value="{{ $lineItem->price }}">
-                            </td>
-                            <td class="text-end">{{ $lineItem->quantity }}
-                                <input type="hidden" name="items[{{ $index }}][quantity]" value="{{ $lineItem->quantity }}">
-                            </td>
-                            <td><button type="button" class="btn btn-sm btn-danger removeItemBtn">Remove</button></td>
-                            <input type="hidden" name="items[{{ $index }}][product_id]" value="{{ $lineItem->product_id }}">
-                            <input type="hidden" name="items[{{ $index }}][variant_id]" value="{{ $lineItem->variant_id }}">
-                            <input type="hidden" name="items[{{ $index }}][sku]" value="{{ $lineItem->sku }}">
-                            <input type="hidden" name="items[{{ $index }}][title]" value="{{ $lineItem->title ?? '' }}">
-                        </tr>
+            <!-- Line Items Section -->
+            <div id="lineItemsSection" style="display: {{ $order->description ? 'none' : 'block' }};">
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Product Variant</label>
+                    <select id="variantSelect" class="form-select">
+                        <option value="">Choose product variant</option>
+                        @foreach($variants as $v)
+                            <option value="{{ $v->id }}" data-product_id="{{ $v->product_id }}" data-sku="{{ $v->sku }}" data-price="{{ $v->price }}" data-title="{{ $v->title }}" data-product_title="{{ $v->product->title ?? '' }}">{{ $v->product->title ?? 'Product' }} — {{ $v->title }} ({{ $v->sku }})</option>
                         @endforeach
-                    </tbody>
-                </table>
+                    </select>
+                </div>
+                <div class="col-md-3 mb-3">
+                    <label class="form-label">Quantity</label>
+                    <input type="number" id="variantQty" class="form-control" value="1" min="1" />
+                </div>
+                <div class="col-md-3 mb-3 d-flex align-items-end">
+                    <button type="button" id="addItemBtn" class="btn btn-secondary">Add Item</button>
+                </div>
+
+                <div class="col-12">
+                    <table class="table table-sm" id="itemsTable">
+                        <thead>
+                            <tr>
+                                <th>Product</th>
+                                <th>Tax</th>
+                                <th>Variant</th>
+                                <th>SKU</th>
+                                <th class="text-end">Price</th>
+                                <th class="text-end">Qty</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach($order->lineItems as $index => $lineItem)
+                            <tr>
+                                <td>{{ $lineItem->name ?? 'N/A' }}</td>
+                                <td>
+                                    <select class="form-select form-select-sm tax-select" name="items[{{ $index }}][tax_id]">
+                                        <option value="">Default</option>
+                                        @foreach($zohoTaxes as $tax)
+                                            <option value="{{ $tax['tax_id'] ?? $tax['id'] }}" 
+                                                {{ ($lineItem->tax_id ?? '') == ($tax['tax_id'] ?? $tax['id']) ? 'selected' : '' }}>
+                                                {{ $tax['tax_name'] ?? $tax['name'] }} ({{ $tax['tax_percentage'] ?? $tax['tax_percentage'] }}%)
+                                            </option>
+                                        @endforeach
+                                    </select>
+                                </td>
+                                <td>{{ $lineItem->title ?? 'N/A' }}</td>
+                                <td>{{ $lineItem->sku ?? 'N/A' }}</td>
+                                <td class="text-end">{{ $lineItem->price }}
+                                    <input type="hidden" name="items[{{ $index }}][price]" value="{{ $lineItem->price }}">
+                                </td>
+                                <td class="text-end">{{ $lineItem->quantity }}
+                                    <input type="hidden" name="items[{{ $index }}][quantity]" value="{{ $lineItem->quantity }}">
+                                </td>
+                                <td><button type="button" class="btn btn-sm btn-danger removeItemBtn">Remove</button></td>
+                                <input type="hidden" name="items[{{ $index }}][product_id]" value="{{ $lineItem->product_id }}">
+                                <input type="hidden" name="items[{{ $index }}][variant_id]" value="{{ $lineItem->variant_id }}">
+                                <input type="hidden" name="items[{{ $index }}][sku]" value="{{ $lineItem->sku }}">
+                                <input type="hidden" name="items[{{ $index }}][title]" value="{{ $lineItem->title ?? '' }}">
+                            </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
             <div class="col-12">
@@ -339,6 +361,18 @@
                     return false;
                 }
             }
+            
+            // Additional validation for description orders
+            const hasDescription = descriptionTextarea.value.trim() !== '';
+            const totalPrice = parseFloat(document.querySelector('input[name="total_price"]').value) || 0;
+            
+            if (hasDescription && totalPrice <= 0) {
+                e.preventDefault();
+                document.querySelector('input[name="total_price"]').focus();
+                alert('Description orders must have a total price greater than 0. Please set the Grand Total (Paid) amount.');
+                return false;
+            }
+            
             return true;
         });
 
@@ -351,12 +385,80 @@
         // Zoho taxes passed from server-side if available; fallback to empty array
         window.zohoTaxes = @json($zohoTaxes ?? []);
 
+        // Description functionality
+        const addDescriptionBtn = document.getElementById('addDescriptionBtn');
+        const removeDescriptionBtn = document.getElementById('removeDescriptionBtn');
+        const descriptionSection = document.getElementById('descriptionSection');
+        const lineItemsSection = document.getElementById('lineItemsSection');
+        const descriptionTextarea = document.getElementById('descriptionTextarea');
+
+        if (addDescriptionBtn) {
+            addDescriptionBtn.addEventListener('click', function() {
+                // Show description section
+                descriptionSection.style.display = 'block';
+                // Hide line items section
+                lineItemsSection.style.display = 'none';
+                // Disable add description button
+                addDescriptionBtn.disabled = true;
+                addDescriptionBtn.textContent = 'Description Added';
+                // Make description required
+                descriptionTextarea.setAttribute('required', 'required');
+                // Clear any existing line items
+                const existingRows = itemsTbody.querySelectorAll('tr');
+                existingRows.forEach(row => {
+                    if (!row.querySelector('input[name*="[product_id]"]').value.includes('existing')) {
+                        row.remove();
+                    }
+                });
+                // Focus on total price field and highlight it
+                const totalPriceField = document.querySelector('input[name="total_price"]');
+                if (totalPriceField) {
+                    totalPriceField.focus();
+                    totalPriceField.style.border = '2px solid #007bff';
+                    totalPriceField.placeholder = 'Enter total amount for this service';
+                }
+            });
+        }
+
+        if (removeDescriptionBtn) {
+            removeDescriptionBtn.addEventListener('click', function() {
+                // Hide description section
+                descriptionSection.style.display = 'none';
+                // Show line items section
+                lineItemsSection.style.display = 'block';
+                // Enable add description button
+                addDescriptionBtn.disabled = false;
+                addDescriptionBtn.textContent = 'Add Description';
+                // Remove description requirement
+                descriptionTextarea.removeAttribute('required');
+                // Clear description
+                descriptionTextarea.value = '';
+                // Reset total price field styling
+                const totalPriceField = document.querySelector('input[name="total_price"]');
+                if (totalPriceField) {
+                    totalPriceField.style.border = '';
+                    totalPriceField.placeholder = '';
+                }
+            });
+        }
+
         if (addItemBtn) {
             addItemBtn.addEventListener('click', function() {
                 const opt = variantSelect.options[variantSelect.selectedIndex];
                 if (!opt || !opt.value) {
                     alert('Please select a product variant to add.');
                     return;
+                }
+
+                // If this is the first new item being added, disable description
+                const existingItemsCount = {{ $order->lineItems->count() }};
+                const newItemsCount = itemsTbody.querySelectorAll('tr').length - existingItemsCount;
+                if (newItemsCount === 0) {
+                    addDescriptionBtn.disabled = true;
+                    addDescriptionBtn.textContent = 'Line Items Added';
+                    descriptionSection.style.display = 'none';
+                    descriptionTextarea.removeAttribute('required');
+                    descriptionTextarea.value = '';
                 }
 
                 const variantId = opt.value;
@@ -398,6 +500,8 @@
                 variantSelect.selectedIndex = 0;
                 variantQty.value = 1;
                 // Recompute pricing fields after adding
+            });
+        }
                 computeTotals();
             });
         }
