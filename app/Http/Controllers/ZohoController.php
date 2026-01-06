@@ -714,10 +714,48 @@ class ZohoController extends Controller
         $organizationId = env('ZOHO_API_ORGANIZATION_ID');
 
         try {
+            // First, get the current invoice details to check balance due
+            $invoiceResponse = $client->get("https://www.zohoapis.com/books/v3/invoices/{$invoiceId}", [
+                'headers' => [
+                    'Authorization' => 'Zoho-oauthtoken ' . self::generateToken(),
+                    'Content-Type' => 'application/json',
+                ],
+                'query' => ['organization_id' => $organizationId],
+            ]);
+
+            $invoiceData = json_decode($invoiceResponse->getBody()->getContents(), true);
+            $invoice = $invoiceData['invoice'] ?? null;
+
+            if (!$invoice) {
+                throw new \Exception("Could not fetch invoice details for payment");
+            }
+
+            $balanceDue = (float)($invoice['balance'] ?? $invoice['total'] ?? 0);
+            $invoiceStatus = $invoice['status'] ?? '';
+
+            \Log::info('Invoice payment check', [
+                'invoice_id' => $invoiceId,
+                'status' => $invoiceStatus,
+                'total' => $invoice['total'] ?? 0,
+                'balance_due' => $balanceDue,
+                'requested_amount' => $amount
+            ]);
+
+            // If invoice is already paid or balance is zero/negative, skip payment
+            if ($invoiceStatus === 'paid' || $balanceDue <= 0) {
+                \Log::info('Invoice already paid or no balance due, skipping payment', [
+                    'invoice_id' => $invoiceId,
+                    'status' => $invoiceStatus,
+                    'balance_due' => $balanceDue
+                ]);
+                return ['message' => 'Invoice already paid or no balance due'];
+            }
+
+            // Use the smaller of the requested amount or balance due
+            $paymentAmount = min((float)$amount, $balanceDue);
+
             // Fetch Razorpay Account's deposit_to_account_id
             $depositAccountId = self::getDepositAccountIdByName('Razorpay Clearing');
-
-            // dd($depositAccountId);
 
             $response = $client->post("https://www.zohoapis.com/books/v3/customerpayments?organization_id={$organizationId}", [
                 'headers' => [
@@ -726,14 +764,14 @@ class ZohoController extends Controller
                 ],
                 'json' => [
                     'customer_id' => $customerId,
-                    'amount' => $amount,
+                    'amount' => $paymentAmount,
                     'date' => now()->toDateString(),
                     'payment_mode' => 'Razorpay Account',
                     'account_id' => $depositAccountId, // Explicit deposit account
                     'invoices' => [
                         [
                             'invoice_id' => $invoiceId,
-                            'amount_applied' => $amount,
+                            'amount_applied' => $paymentAmount,
                         ]
                     ],
                 ],
@@ -741,11 +779,20 @@ class ZohoController extends Controller
 
             $paymentResponse = json_decode($response->getBody()->getContents(), true);
 
-            // \Log::info("Payment Response", ['response' => $paymentResponse]);
+            \Log::info("Payment applied successfully", [
+                'invoice_id' => $invoiceId,
+                'amount_applied' => $paymentAmount,
+                'response' => $paymentResponse
+            ]);
 
             return $paymentResponse;
         } catch (\Exception $e) {
-            // \Log::error("Error marking invoice as paid: " . $e->getMessage());
+            \Log::error("Error marking invoice as paid", [
+                'invoice_id' => $invoiceId,
+                'customer_id' => $customerId,
+                'requested_amount' => $amount,
+                'error' => $e->getMessage()
+            ]);
             throw new \Exception("Error marking invoice as paid: " . $e->getMessage());
         }
     }
@@ -1643,6 +1690,349 @@ class ZohoController extends Controller
         }
     }
 
+    public static function updateInvoice($invoiceId, $customer, $cartData, $discount = 0, $shipping_amt = 0, $addressPost, $orderId, $markPaid = true)
+    {
+        $getOrder = Order::where('order_number', $orderId)->first();
+        $client   = new \GuzzleHttp\Client();
+
+        // ==== Your registered branches only ====
+        $registered = [
+            'DL' => ['gst_no' => '07AALCK2953Q1ZS', 'location_id' => '5630788000000144349', 'series_name' => 'Shopify'],
+            'TS' => ['gst_no' => '36AALCK2953Q1ZR', 'location_id' => '5630788000000144368', 'series_name' => 'Shopify'],
+            'KA' => ['gst_no' => '29AALCK2953Q1ZM', 'location_id' => '5630788000000144199', 'series_name' => 'Shopify'],
+        ];
+
+        // States that should be billed from a specific registered branch (routing)
+        $routeMap = [
+            'UP' => 'DL',
+            'HR' => 'DL',
+            // add more non-registered states here if needed -> 'XX' => 'DL'
+        ];
+
+        // --- normalize to 2-letter GST codes ---
+        $norm = function ($val) {
+            if (!$val) return '';
+            $v = strtoupper(trim($val));
+            $numToCode = ['07' => 'DL', '36' => 'TS', '29' => 'KA', '09' => 'UP', '06' => 'HR', '27' => 'MH', '24' => 'GJ', '33' => 'TN', '32' => 'KL', '08' => 'RJ', '03' => 'PB', '23' => 'MP', '19' => 'WB'];
+            if (isset($numToCode[$v])) return $numToCode[$v];
+            $two = ['AN', 'AP', 'AR', 'AS', 'BR', 'CH', 'CT', 'DH', 'DL', 'GA', 'GJ', 'HR', 'HP', 'JK', 'JH', 'KA', 'KL', 'LA', 'LD', 'MP', 'MH', 'MN', 'ML', 'MZ', 'NL', 'OR', 'PY', 'PB', 'RJ', 'SK', 'TN', 'TS', 'TR', 'UP', 'UT', 'WB'];
+            if (in_array($v, $two, true)) return $v;
+            $nameToCode = [
+                'ANDAMAN AND NICOBAR ISLANDS' => 'AN',
+                'ANDHRA PRADESH' => 'AP',
+                'ARUNACHAL PRADESH' => 'AR',
+                'ASSAM' => 'AS',
+                'BIHAR' => 'BR',
+                'CHANDIGARH' => 'CH',
+                'CHHATTISGARH' => 'CT',
+                'DADRA AND NAGAR HAVELI AND DAMAN AND DIU' => 'DH',
+                'DELHI' => 'DL',
+                'GOA' => 'GA',
+                'GUJARAT' => 'GJ',
+                'HARYANA' => 'HR',
+                'HIMACHAL PRADESH' => 'HP',
+                'JAMMU AND KASHMIR' => 'JK',
+                'JHARKHAND' => 'JH',
+                'KARNATAKA' => 'KA',
+                'KERALA' => 'KL',
+                'LADAKH' => 'LA',
+                'LAKSHADWEEP' => 'LD',
+                'MADHYA PRADESH' => 'MP',
+                'MAHARASHTRA' => 'MH',
+                'MANIPUR' => 'MN',
+                'MEGHALAYA' => 'ML',
+                'MIZORAM' => 'MZ',
+                'NAGALAND' => 'NL',
+                'ODISHA' => 'OR',
+                'ORISSA' => 'OR',
+                'PUDUCHERRY' => 'PY',
+                'PONDICHERRY' => 'PY',
+                'PUNJAB' => 'PB',
+                'RAJASTHAN' => 'RJ',
+                'SIKKIM' => 'SK',
+                'TAMIL NADU' => 'TN',
+                'TELANGANA' => 'TS',
+                'TRIPURA' => 'TR',
+                'UTTAR PRADESH' => 'UP',
+                'UTTARAKHAND' => 'UT',
+                'WEST BENGAL' => 'WB'
+            ];
+            $vName = preg_replace('/\s+/', ' ', $v);
+            return $nameToCode[$vName] ?? '';
+        };
+
+        // --- BUYER state (billing → shipping fallback) ---
+        $shippingAddress = ShippingAddress::where('order_id', $getOrder->id)->first();
+        $buyer = $norm($shippingAddress->province ?? '');
+
+        // If shipping is not available, fallback to billing data passed in via $addressPost
+        if ($buyer === '') {
+            $buyer = $norm($addressPost['state_code'] ?? '') ?: $norm($addressPost['state'] ?? '');
+        }
+
+        // If still missing, try the stored billing address record
+        if ($buyer === '') {
+            try {
+                $billingAddress = \App\Models\BillingAddress::where('order_id', $getOrder->id)->first();
+                if ($billingAddress && !empty($billingAddress->province)) {
+                    $buyer = $norm($billingAddress->province);
+                }
+            } catch (\Exception $e) {
+                \Log::warning('updateInvoice - error fetching BillingAddress for fallback', ['order_number' => $orderId, 'error' => $e->getMessage()]);
+            }
+        }
+
+        // Final safeguard: if still empty, default to 'DL'
+        if ($buyer === '') {
+            \Log::warning('updateInvoice - Could not determine buyer state; defaulting to DL', ['order_number' => $orderId]);
+            $buyer = 'DL';
+        }
+
+        // --- Choose seller branch ---
+        $sellerCode = array_key_exists($buyer, $registered) ? $buyer : ($routeMap[$buyer] ?? 'DL');
+        $seller     = $registered[$sellerCode];
+
+        $sellerGst  = $seller['gst_no'];
+        $locationId = $seller['location_id'];
+        $seriesName = $seller['series_name'];
+
+        $isInter = ($buyer !== $sellerCode);
+
+        // --- Fixed 0% tax ids ---
+        $zero   = self::fixedZeroTaxIds();
+        $igst0  = $zero['IGST0'];
+        $gst0g  = $zero['GST0_GROUP'];
+        $taxId  = $isInter ? $igst0 : $gst0g;
+
+        // --- Build line items ---
+        $line_items = [];
+        foreach ($cartData as $cart) {
+            // Check if this is a description-only order (MISC-SERVICE)
+            if ($cart->item_id === 'MISC-SERVICE') {
+                // Handle description orders without SKU lookup
+                $resolvedTaxId = !empty($cart->tax_id) ? $cart->tax_id : $taxId; // Use default tax
+                
+                \Log::info('Processing description order item for update', [
+                    'order_id' => $orderId,
+                    'title' => $cart->title,
+                    'price' => $cart->price,
+                    'qty' => $cart->qty,
+                    'tax_id' => $resolvedTaxId
+                ]);
+                
+                $line_items[] = [
+                    'name'       => $cart->title ?? 'Miscellaneous Service',
+                    'rate'       => $cart->price,
+                    'quantity'   => $cart->qty,
+                    'tax_id'     => $resolvedTaxId,
+                    'hsn_or_sac' => null, // No HSN/SAC for misc services
+                    // Don't include item_id for description orders - let Zoho create as text item
+                ];
+            } else {
+                // Regular product items - do SKU lookup
+                $item = self::skuToItemId($cart->item_id);
+
+                // If the caller provided an explicit Zoho tax_id for the item, use it
+                $resolvedTaxId = null;
+                if (!empty($cart->tax_id)) {
+                    $resolvedTaxId = $cart->tax_id;
+                }
+
+                // If not supplied, fall back to existing resolution logic
+                if (!$resolvedTaxId) {
+                    // Prefer item-level tax preferences returned by Zoho for the SKU
+                    if (!empty($item['tax_by_specification']) && is_array($item['tax_by_specification'])) {
+                        $resolvedTaxId = self::selectTaxIdFromItemTaxPreferences($item['tax_by_specification'], $isInter);
+                    }
+
+                    // If not resolved from item, try to match org taxes by percentage
+                    if (!$resolvedTaxId) {
+                        $taxPercentage = null;
+                        if (!empty($item['tax_by_specification'])) {
+                            foreach ($item['tax_by_specification'] as $spec => $meta) {
+                                if (!empty($meta['tax_percentage'])) {
+                                    $taxPercentage = (float)$meta['tax_percentage'];
+                                    break;
+                                }
+                            }
+                        }
+                        if ($taxPercentage !== null) {
+                            $resolvedTaxId = self::findOrgTaxIdByPercentage($taxPercentage);
+                        }
+                    }
+
+                    // final fallback to configured zero-tax id
+                    if (!$resolvedTaxId) {
+                        $resolvedTaxId = $taxId;
+                    }
+                }
+
+                $line_items[] = [
+                    'name'       => $item['item_name'],
+                    'rate'       => $cart->price,
+                    'quantity'   => $cart->qty,
+                    'item_id'    => $item['item_id'],
+                    'tax_id'     => $resolvedTaxId,
+                    'hsn_or_sac' => $item['hsn_or_sac'],
+                ];
+            }
+        }
+
+        // For shipping
+        $shipping_charge = 0.0;
+        if ($shipping_amt > 0) {
+            $shipping_charge = (float)$shipping_amt;
+        }
+
+        try {
+            // First, get the current invoice details to check for existing payments
+            $currentInvoiceResponse = $client->get("https://www.zohoapis.com/books/v3/invoices/{$invoiceId}", [
+                'headers' => [
+                    'Authorization' => 'Zoho-oauthtoken ' . self::generateToken(),
+                    'Content-Type' => 'application/json',
+                ],
+                'query' => ['organization_id' => env('ZOHO_API_ORGANIZATION_ID')],
+            ]);
+
+            $currentInvoiceData = json_decode($currentInvoiceResponse->getBody()->getContents(), true);
+            $currentInvoice = $currentInvoiceData['invoice'] ?? null;
+
+            if (!$currentInvoice) {
+                throw new \Exception("Could not fetch current invoice details for update");
+            }
+
+            $currentTotal = (float)($currentInvoice['total'] ?? 0);
+            $currentBalance = (float)($currentInvoice['balance'] ?? 0);
+            $existingPayments = $currentTotal - $currentBalance;
+
+            // Calculate subtotal from line items
+            $subtotal = 0;
+            foreach ($line_items as $item) {
+                $subtotal += ($item['rate'] * $item['quantity']);
+            }
+
+            // Ensure numeric discount
+            $discount = is_null($discount) ? 0 : (float)$discount;
+            
+            // Validate discount: don't apply if subtotal is zero or negative, or if discount is zero/negative
+            $applyDiscount = ($subtotal > 0 && $discount > 0);
+
+            // Calculate new total
+            $newTotal = $subtotal + $shipping_charge;
+            if ($applyDiscount) {
+                $newTotal -= $discount;
+            }
+
+            \Log::info('Invoice update - payment validation', [
+                'invoice_id' => $invoiceId,
+                'current_total' => $currentTotal,
+                'current_balance' => $currentBalance,
+                'existing_payments' => $existingPayments,
+                'new_total' => $newTotal,
+                'invoice_status' => $currentInvoice['status'] ?? ''
+            ]);
+
+            // Check if existing payments exceed new total
+            if ($existingPayments > $newTotal && $existingPayments > 0) {
+                \Log::warning('Existing payments exceed new invoice total - will not mark as paid', [
+                    'invoice_id' => $invoiceId,
+                    'existing_payments' => $existingPayments,
+                    'new_total' => $newTotal,
+                    'overpayment' => $existingPayments - $newTotal
+                ]);
+
+                // Don't mark as paid to avoid payment conflicts
+                $markPaid = false;
+            }
+            
+            \Log::info('Zoho invoice update discount validation', [
+                'order_id' => $orderId,
+                'invoice_id' => $invoiceId,
+                'subtotal' => $subtotal,
+                'discount' => $discount,
+                'apply_discount' => $applyDiscount
+            ]);
+
+            $payload = [
+                'customer_id'      => $customer->contact_id,
+                'location_id'      => $locationId,
+                'line_items'       => $line_items,
+                'description'      => 'Invoice updated by API',
+                'reason'           => 'Order details updated - line items, pricing, or shipping modified',
+                // explicit shipping fields so Zoho displays shipping separately
+                'shipping_charge'  => $shipping_charge,
+                'shipping_charge_tax_id' => $shipping_charge > 0 ? $taxId : null,
+                'order_id'         => $orderId,
+                'reference_number' => $orderId,
+                // IMPORTANT:
+                'place_of_supply'  => $buyer,     // buyer's 2-letter code
+                'gst_no'           => $sellerGst, // seller branch's GSTIN
+                'series_name'      => $seriesName,
+            ];
+
+            // Only add discount fields if discount should be applied
+            if ($applyDiscount) {
+                $payload['discount'] = $discount;
+                $payload['discount_type'] = 'entity_level';
+            }
+
+            // Only set status 'paid' when caller requests marking paid. For manual orders we keep draft/unpaid.
+            if ($markPaid) {
+                $payload['status'] = 'paid';
+            } else {
+                // omit marking as paid; create as draft
+                $payload['status'] = 'draft';
+            }
+
+            $resp = $client->put("https://www.zohoapis.com/books/v3/invoices/{$invoiceId}", [
+                'headers' => [
+                    'Authorization' => 'Zoho-oauthtoken ' . self::generateToken(),
+                    'Content-Type'  => 'application/json',
+                ],
+                'query' => ['organization_id' => env('ZOHO_API_ORGANIZATION_ID')],
+                'json'  => $payload,
+            ]);
+
+            $invoiceData = json_decode($resp->getBody()->getContents(), true);
+
+            if (!isset($invoiceData['invoice']['invoice_id'], $invoiceData['invoice']['customer_id'])) {
+                throw new \Exception("Invoice update failed or missing data.");
+            }
+
+            // Mark invoice as paid in Zoho only when requested
+            if ($markPaid) {
+                self::markInvoiceAsPaid(
+                    $invoiceData['invoice']['invoice_id'],
+                    $invoiceData['invoice']['customer_id'],
+                    $invoiceData['invoice']['total']
+                );
+            }
+
+            \Log::info('INVOICE-UPDATE-SUCCESS', [
+                'invoice_id' => $invoiceData['invoice']['invoice_id'],
+                'order_number' => $orderId,
+                'total' => $invoiceData['invoice']['total']
+            ]);
+
+            return $invoiceData;
+        } catch (\Exception $e) {
+            // Try to extract response body from Guzzle RequestException if present
+            $responseBody = '';
+            if (method_exists($e, 'getResponse') && $e->getResponse()) {
+                $responseBody = $e->getResponse()->getBody()->getContents();
+            }
+
+            \Log::error('INVOICE-UPDATE-ERROR', [
+                'order_number' => $orderId,
+                'invoice_id' => $invoiceId,
+                'error' => $e->getMessage(),
+                'response' => $responseBody
+            ]);
+
+            throw new \Exception("Error updating invoice: " . $e->getMessage() . " | response: " . $responseBody);
+        }
+    }
+
 
     public static function createEstimate($contactId, $allQuotationItems, $productDetails)
     {
@@ -1741,6 +2131,108 @@ class ZohoController extends Controller
         ]);
         $body = json_decode($response->getBody());
         return $body->contacts[0];
+    }
+
+    public static function updateCustomerInZoho($zohoContactId, $localCustomerId, $address = [])
+    {
+        $customer = Customer::where('id', $localCustomerId)->first();
+        if (!$customer) {
+            throw new \Exception("Customer not found with ID: {$localCustomerId}");
+        }
+
+        $client = new Client();
+        $organizationId = env('ZOHO_API_ORGANIZATION_ID');
+
+        try {
+            $customerUpdateData = [
+                "contact_name" => $customer->first_name . " " . $customer->last_name,
+                "email" => $customer->email,
+                "phone" => $customer->phone,
+                "billing_address" => $address,
+                "shipping_address" => $address,
+                "contact_persons" => [
+                    [
+                        "email" => $customer->email,
+                        "phone" => $customer->phone,
+                    ]
+                ],
+            ];
+
+            // Add GST details if available
+            if (!empty($customer->gstin)) {
+                $customerUpdateData['company_name'] = $customer->company ?? '';
+                $customerUpdateData['gst_treatment'] = "business_gst";
+                $customerUpdateData['gst_no'] = $customer->gstin;
+            }
+
+            \Log::info('Updating customer in Zoho', [
+                'zoho_contact_id' => $zohoContactId,
+                'local_customer_id' => $localCustomerId,
+                'customer_name' => $customerUpdateData['contact_name']
+            ]);
+
+            $response = $client->put("https://www.zohoapis.com/books/v3/contacts/{$zohoContactId}", [
+                'headers' => [
+                    'Authorization' => 'Zoho-oauthtoken ' . self::generateToken(),
+                    'Content-Type' => 'application/json',
+                ],
+                'query' => ['organization_id' => $organizationId],
+                'json' => $customerUpdateData,
+            ]);
+
+            $responseData = json_decode($response->getBody()->getContents(), true);
+
+            \Log::info('Customer updated successfully in Zoho', [
+                'zoho_contact_id' => $zohoContactId,
+                'response' => $responseData
+            ]);
+
+            return $responseData;
+
+        } catch (\Exception $e) {
+            \Log::error('Error updating customer in Zoho', [
+                'zoho_contact_id' => $zohoContactId,
+                'local_customer_id' => $localCustomerId,
+                'error' => $e->getMessage()
+            ]);
+            throw new \Exception("Error updating customer in Zoho: " . $e->getMessage());
+        }
+    }
+
+    public static function changeInvoiceStatusToDraft($invoiceId)
+    {
+        $client = new Client();
+        $organizationId = env('ZOHO_API_ORGANIZATION_ID');
+
+        try {
+            \Log::info('Changing invoice status to draft', [
+                'invoice_id' => $invoiceId
+            ]);
+
+            $response = $client->post("https://www.zohoapis.com/books/v3/invoices/{$invoiceId}/status/draft", [
+                'headers' => [
+                    'Authorization' => 'Zoho-oauthtoken ' . self::generateToken(),
+                    'Content-Type' => 'application/json',
+                ],
+                'query' => ['organization_id' => $organizationId],
+            ]);
+
+            $responseData = json_decode($response->getBody()->getContents(), true);
+
+            \Log::info('Invoice status changed to draft successfully', [
+                'invoice_id' => $invoiceId,
+                'response' => $responseData
+            ]);
+
+            return $responseData;
+
+        } catch (\Exception $e) {
+            \Log::error('Error changing invoice status to draft', [
+                'invoice_id' => $invoiceId,
+                'error' => $e->getMessage()
+            ]);
+            throw new \Exception("Error changing invoice status to draft: " . $e->getMessage());
+        }
     }
     public static function allOrganizations()
     {

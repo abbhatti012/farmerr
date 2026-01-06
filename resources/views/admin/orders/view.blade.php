@@ -102,17 +102,49 @@
 
                 @if($order->financial_status === 'paid')
                 <span class="btn btn-sm btn-primary d-flex flex-center ms-3 px-4 py-3">
-                    <span><a href="{{ route('admin.create.zoho.order', $order->order_number) }}" class="text-white text-hover-black">Create Zoho Order</span></a>
+                    <span><a href="{{ route('admin.create.zoho.order', $order->order_number) }}" class="text-white text-hover-black">
+                        @if($zohoInvoiceExists)
+                            Update Zoho Order
+                        @else
+                            Create Zoho Order
+                        @endif
+                    </span></a>
                 </span>
                 <span class="btn btn-sm btn-warning d-flex flex-center ms-3 px-4 py-3">
-                    <span><a href="{{ route('admin.approve.order', $order->order_number) }}" class="text-white text-hover-black">Approve Order</span></a>
+                    <span><a href="{{ route('admin.approve.order', $order->order_number) }}" class="text-white text-hover-black">
+                        @if($zohoInvoiceExists)
+                            @if($zohoInvoiceStatus === 'draft')
+                                Update Draft Order
+                            @else
+                                Convert to Draft
+                            @endif
+                        @else
+                            Create Draft Order
+                        @endif
+                    </span></a>
                 </span>
                 @else($order->financial_status === 'refunded')
                 <span class="btn btn-sm btn-primary d-flex flex-center ms-3 px-4 py-3">
-                    <span><a href="{{ route('admin.create.zoho.order', $order->order_number) }}" class="text-white text-hover-black">Create Zoho Order</span></a>
+                    <span><a href="{{ route('admin.create.zoho.order', $order->order_number) }}" class="text-white text-hover-black">
+                        @if($zohoInvoiceExists)
+                            Update Zoho Order
+                        @else
+                            Create Zoho Order
+                        @endif
+                    </span></a>
                 </span>
                 <span class="btn btn-sm btn-warning d-flex flex-center ms-3 px-4 py-3">
-                    <span><a href="{{ route('admin.approve.order', $order->order_number) }}" class="text-white text-hover-black">Approve Order</span></a>
+                    <span><a href="{{ route('admin.approve.order', $order->order_number) }}" class="text-white text-hover-black">
+                        @if($zohoInvoiceExists)
+                            @if($zohoInvoiceStatus === 'draft')
+                                Update Draft Order
+                            @else
+                                Convert to Draft
+                            @endif
+                        @else
+                            Create Draft Order
+                        @endif
+                    </span></a>
                 </span>
                 <form action="{{ route('admin.orders.createCreditNote', $order->id) }}" method="POST">
                     @csrf
@@ -215,6 +247,20 @@
                                                     </div>
                                                 </td>
                                                 <td class="fw-bold text-end">{{ $order->delivery_date ?? (@$order->noteAttributes->value ?? '—') }}</td>
+                                            </tr>
+                                            <tr>
+                                                <td class="text-muted">
+                                                    <div class="d-flex align-items-center">
+                                                        <i class="ki-outline ki-document fs-2 me-2"></i> Zoho Status
+                                                    </div>
+                                                </td>
+                                                <td class="fw-bold text-end">
+                                                    @if($zohoInvoiceExists)
+                                                        <span class="badge badge-success">Invoice Created</span>
+                                                    @else
+                                                        <span class="badge badge-warning">Not Sent</span>
+                                                    @endif
+                                                </td>
                                             </tr>
                                         </tbody>
                                     </table>
@@ -744,7 +790,7 @@
                                                         </tr>
                                                         <tr>
                                                             <td colspan="4" class="fs-3 text-gray-900 text-end">
-                                                                Paid
+                                                                Amount
                                                             </td>
                                                             <td class="text-gray-900 fs-3 fw-bolder text-end">
                                                                 ₹{{ number_format($order->total_price) }}
