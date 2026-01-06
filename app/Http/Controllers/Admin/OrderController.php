@@ -2042,7 +2042,207 @@ class OrderController extends Controller
             }
         }
         
+        // Automatically update in Zoho if invoice exists
+        try {
+            $existingInvoice = ZohoController::getInvoiceByOrderNumber($order->order_number);
+            if ($existingInvoice) {
+                \Log::info('Order updated - automatically updating Zoho invoice', [
+                    'order_id' => $order->id,
+                    'order_number' => $order->order_number,
+                    'invoice_id' => $existingInvoice['invoice_id']
+                ]);
+                
+                // Update in Zoho while preserving the current invoice status
+                $this->updateOrderInZohoPreserveStatus($request, $order->order_number, $validated['items'] ?? null, $existingInvoice);
+            }
+        } catch (\Exception $e) {
+            \Log::warning('Failed to automatically update Zoho invoice after order edit', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'error' => $e->getMessage()
+            ]);
+            // Don't fail the order update if Zoho update fails
+        }
+        
         return redirect()->route('admin.orders.show', $order->id)
             ->with('success', 'Order updated successfully');
+    }
+
+    public function updateOrderInZohoPreserveStatus(Request $request, $order_number, $submittedItems = null, $existingInvoice = null)
+    {
+        $order = Order::with('lineItems')->where('order_number', $order_number)->first();
+        if (!$order) {
+            throw new \Exception('Order not found');
+        }
+
+        // Use existing invoice if provided, otherwise fetch it
+        if (!$existingInvoice) {
+            $existingInvoice = ZohoController::getInvoiceByOrderNumber($order_number);
+            if (!$existingInvoice) {
+                throw new \Exception('No existing invoice found in Zoho for this order');
+            }
+        }
+
+        // Get the current invoice status to preserve it
+        $currentStatus = $existingInvoice['status'] ?? 'draft';
+        $shouldMarkPaid = ($currentStatus === 'paid');
+
+        try {
+            \Log::info('updateOrderInZohoPreserveStatus called', [
+                'order_number' => $order_number,
+                'invoice_id' => $existingInvoice['invoice_id'],
+                'current_status' => $currentStatus,
+                'will_mark_paid' => $shouldMarkPaid,
+                'submitted_items_present' => !empty($submittedItems),
+            ]);
+        } catch (\Exception $e) {
+            // ignore logging errors
+        }
+
+        $order_id = $order->id;
+        $customer = Customer::where('order_id', $order_id)->first();
+        $customer_id = $customer->id;
+        $promo_code_amount = $order->promo_code_amount ?? $order->total_discounts ?? 0;
+        $shipping_amt = $order->total_shipping_price;
+
+        try {
+            $cartData = [];
+            $total_price = 0;
+
+            // Check if order has description instead of line items
+            if (!empty($order->description) && $order->lineItems->isEmpty()) {
+                // Validate that description order has a valid price
+                $orderPrice = $order->total_price ?? 0;
+                if ($orderPrice <= 0) {
+                    throw new \Exception('Description orders must have a valid price greater than 0');
+                }
+
+                // Use hardcoded details for description-only orders
+                $cartData[] = (object)[
+                    'qty' => 1,
+                    'item_id' => 'MISC-SERVICE',
+                    'price' => $orderPrice,
+                    'title' => 'Miscellaneous Service - ' . substr($order->description, 0, 100),
+                    'tax_id' => null,
+                ];
+                $total_price = $orderPrice;
+            }
+            // If the UI submitted items (from the edit form), prefer those
+            elseif (!empty($submittedItems) && is_array($submittedItems)) {
+                foreach ($submittedItems as $it) {
+                    $qty = intval($it['quantity'] ?? 1);
+                    $price = floatval($it['price'] ?? 0);
+                    $total_price += $price * $qty;
+                    $cartData[] = (object)[
+                        'qty' => $qty,
+                        'item_id' => $it['sku'] ?? ($it['variant_id'] ?? null),
+                        'price' => $price,
+                        'title' => $it['title'] ?? null,
+                        'tax_id' => $it['tax_id'] ?? null,
+                    ];
+                }
+            } else {
+                $lineItems = $order->lineItems;
+                if ($lineItems->isEmpty()) {
+                    throw new \Exception('Order has no line items or description');
+                }
+                
+                foreach ($lineItems as $lineItem) {
+                    $product = LineItem::where('line_items_id', $lineItem->line_items_id)->first();
+                    if (!$product || !$product->sku) {
+                        throw new \Exception('Zoho SKU not added for product id');
+                    }
+                    
+                    $total_price += $lineItem->price * $lineItem->quantity;
+
+                    // Resolve tax_id
+                    $resolvedTaxId = null;
+                    try {
+                        $zohoItem = \App\Http\Controllers\ZohoController::findItemBySKU($product->sku);
+                        if (!empty($zohoItem) && !empty($zohoItem['item_tax_preferences']) && is_array($zohoItem['item_tax_preferences'])) {
+                            $first = $zohoItem['item_tax_preferences'][0] ?? null;
+                            if (!empty($first['tax_id'])) {
+                                $resolvedTaxId = $first['tax_id'];
+                            }
+                        }
+                    } catch (\Exception $e) {
+                        \Log::warning('Could not resolve Zoho item tax for SKU ' . ($product->sku ?? '')); 
+                    }
+
+                    $dbTaxId = $product->tax_id ?? null;
+                    $usedTaxId = $dbTaxId ?: $resolvedTaxId;
+
+                    $cartData[] = (object)[
+                        'qty' => $lineItem->quantity,
+                        'item_id' => $product->sku,
+                        'price' => $lineItem->price,
+                        'title' => $product->title,
+                        'tax_id' => $usedTaxId,
+                    ];
+                }
+            }
+
+            $address = BillingAddress::where('order_id', $order_id)->first();
+            $addressPost = [
+                "attention" => $address->name,
+                "address" => substr($address->address1, 0, 100),
+                "city" => $address->city,
+                "state" => $address->province,
+                "zip" => $address->zip,
+                "country" => $address->country,
+            ];
+
+            $customerFromZoho = ZohoController::createOrGetCustomer($customer_id, $addressPost);
+
+            // Update customer information in Zoho if it has changed
+            try {
+                ZohoController::updateCustomerInZoho($customerFromZoho->contact_id, $customer_id, $addressPost);
+            } catch (\Exception $e) {
+                \Log::warning('Failed to update customer in Zoho during automatic update', [
+                    'order_number' => $order_number,
+                    'customer_id' => $customer_id,
+                    'error' => $e->getMessage()
+                ]);
+                // Don't fail the entire update if customer update fails
+            }
+
+            try {
+                \Log::info('Zoho updateInvoice payload (preserve status)', [
+                    'order_number' => $order_number,
+                    'invoice_id' => $existingInvoice['invoice_id'],
+                    'cartData' => $cartData,
+                    'discount' => $promo_code_amount,
+                    'shipping' => $shipping_amt,
+                    'preserve_status' => $currentStatus,
+                    'markPaid' => $shouldMarkPaid,
+                ]);
+            } catch (\Exception $e) {
+                // ignore logging errors
+            }
+
+            $res = ZohoController::updateInvoice(
+                $existingInvoice['invoice_id'],
+                $customerFromZoho, 
+                $cartData, 
+                $promo_code_amount, 
+                $shipping_amt, 
+                $addressPost, 
+                $order_number, 
+                $shouldMarkPaid // Preserve the original payment status
+            );
+
+            \Log::info('Zoho invoice updated automatically after order edit', [
+                'order_number' => $order_number,
+                'invoice_id' => $existingInvoice['invoice_id'],
+                'status_preserved' => $currentStatus
+            ]);
+
+        } catch (\Exception $e) {
+            \Log::error('updateOrderInZohoPreserveStatus - exception', [
+                'order_number' => $order_number, 
+                'error' => $e->getMessage()
+            ]);
+            throw $e;
+        }
     }
 }

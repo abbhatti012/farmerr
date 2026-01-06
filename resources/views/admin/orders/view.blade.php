@@ -101,51 +101,17 @@
 
 
                 @if($order->financial_status === 'paid')
-                <span class="btn btn-sm btn-primary d-flex flex-center ms-3 px-4 py-3">
-                    <span><a href="{{ route('admin.create.zoho.order', $order->order_number) }}" class="text-white text-hover-black">
-                        @if($zohoInvoiceExists)
-                            Update Zoho Order
-                        @else
-                            Create Zoho Order
-                        @endif
-                    </span></a>
-                </span>
-                <span class="btn btn-sm btn-warning d-flex flex-center ms-3 px-4 py-3">
-                    <span><a href="{{ route('admin.approve.order', $order->order_number) }}" class="text-white text-hover-black">
-                        @if($zohoInvoiceExists)
-                            @if($zohoInvoiceStatus === 'draft')
-                                Update Draft Order
-                            @else
-                                Convert to Draft
-                            @endif
-                        @else
-                            Create Draft Order
-                        @endif
-                    </span></a>
-                </span>
+                @if(!$zohoInvoiceExists)
+                    <span class="btn btn-sm btn-warning d-flex flex-center ms-3 px-4 py-3">
+                        <span><a href="{{ route('admin.approve.order', $order->order_number) }}" class="text-white text-hover-black">Create Draft Order</span></a>
+                    </span>
+                @endif
                 @else($order->financial_status === 'refunded')
-                <span class="btn btn-sm btn-primary d-flex flex-center ms-3 px-4 py-3">
-                    <span><a href="{{ route('admin.create.zoho.order', $order->order_number) }}" class="text-white text-hover-black">
-                        @if($zohoInvoiceExists)
-                            Update Zoho Order
-                        @else
-                            Create Zoho Order
-                        @endif
-                    </span></a>
-                </span>
-                <span class="btn btn-sm btn-warning d-flex flex-center ms-3 px-4 py-3">
-                    <span><a href="{{ route('admin.approve.order', $order->order_number) }}" class="text-white text-hover-black">
-                        @if($zohoInvoiceExists)
-                            @if($zohoInvoiceStatus === 'draft')
-                                Update Draft Order
-                            @else
-                                Convert to Draft
-                            @endif
-                        @else
-                            Create Draft Order
-                        @endif
-                    </span></a>
-                </span>
+                @if(!$zohoInvoiceExists)
+                    <span class="btn btn-sm btn-warning d-flex flex-center ms-3 px-4 py-3">
+                        <span><a href="{{ route('admin.approve.order', $order->order_number) }}" class="text-white text-hover-black">Create Draft Order</span></a>
+                    </span>
+                @endif
                 <form action="{{ route('admin.orders.createCreditNote', $order->id) }}" method="POST">
                     @csrf
                     <button type="submit" class="btn btn-sm btn-primary text-white text-hover-black ms-3">Create Credit Note</button>
@@ -256,7 +222,13 @@
                                                 </td>
                                                 <td class="fw-bold text-end">
                                                     @if($zohoInvoiceExists)
-                                                        <span class="badge badge-success">Invoice Created</span>
+                                                        <span class="badge badge-success">
+                                                            Invoice Created
+                                                            @if($zohoInvoiceStatus)
+                                                                ({{ ucfirst($zohoInvoiceStatus) }})
+                                                            @endif
+                                                        </span>
+                                                        <br><small class="text-muted">Auto-updates when order is edited</small>
                                                     @else
                                                         <span class="badge badge-warning">Not Sent</span>
                                                     @endif
