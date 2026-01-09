@@ -139,41 +139,37 @@
             </div>
 
             <div class="col-12 mt-4">
-                <h5>Add Line Items or Description</h5>
+                <h5>Add Line Items</h5>
                 <div class="mb-3">
-                    <button type="button" id="addDescriptionBtn" class="btn btn-outline-primary me-2">Add Description</button>
-                    <small class="text-muted">Choose either line items or description (not both). Description is useful when you don't have specific products to add.</small>
+                    <small class="text-muted">Search for products or enter a custom description. Custom descriptions will be sent to Zoho as misc charges (no SKU required).</small>
                 </div>
             </div>
 
-            <!-- Description Section (hidden by default) -->
-            <div id="descriptionSection" class="col-12 mb-3" style="display: none;">
-                <div class="alert alert-info">
-                    <strong>Description Order:</strong> You're creating an order with a custom description. 
-                    Make sure to set the <strong>Grand Total (Paid)</strong> amount in the pricing section below.
-                </div>
-                <label class="form-label">Order Description *</label>
-                <textarea name="description" id="descriptionTextarea" class="form-control" rows="4" placeholder="Enter order description..."></textarea>
-                <button type="button" id="removeDescriptionBtn" class="btn btn-sm btn-danger mt-2">Remove Description</button>
-            </div>
-
-            <!-- Line Items Section -->
+            <!-- Unified Line Items Section -->
             <div id="lineItemsSection">
-                <div class="col-md-6 mb-3">
-                    <label class="form-label">Product Variant</label>
-                    <select id="variantSelect" class="form-select">
-                        <option value="">Choose product variant</option>
-                        @foreach($variants as $v)
-                            <option value="{{ $v->id }}" data-product_id="{{ $v->product_id }}" data-sku="{{ $v->sku }}" data-price="{{ $v->price }}" data-title="{{ $v->title }}" data-product_title="{{ $v->product->title ?? '' }}">{{ $v->product->title ?? 'Product' }} — {{ $v->title }} ({{ $v->sku }})</option>
-                        @endforeach
-                    </select>
-                </div>
-                <div class="col-md-3 mb-3">
-                    <label class="form-label">Quantity</label>
-                    <input type="number" id="variantQty" class="form-control" value="1" min="1" />
-                </div>
-                <div class="col-md-3 mb-3 d-flex align-items-end">
-                    <button type="button" id="addItemBtn" class="btn btn-secondary">Add Item</button>
+                <div class="row">
+                    <div class="col-md-4 mb-3" style="position: relative;">
+                        <label class="form-label">Search Product or Enter Description</label>
+                        <input type="text" id="itemSearch" class="form-control" placeholder="Type to search products or enter custom description..." autocomplete="off" />
+                        <div id="searchResults" class="dropdown-menu w-100" style="display: none; max-height: 200px; overflow-y: auto; position: absolute; z-index: 1000; border: 1px solid #ced4da; border-radius: 0.375rem; box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);"></div>
+                        <input type="hidden" id="selectedVariantId" />
+                        <input type="hidden" id="selectedProductId" />
+                        <input type="hidden" id="selectedSku" />
+                        <input type="hidden" id="selectedPrice" />
+                        <input type="hidden" id="selectedTitle" />
+                        <input type="hidden" id="selectedProductTitle" />
+                    </div>
+                    <div class="col-md-2 mb-3">
+                        <label class="form-label">Quantity</label>
+                        <input type="number" id="variantQty" class="form-control" value="1" min="1" />
+                    </div>
+                    <div class="col-md-3 mb-3" id="customPriceSection" style="display: none;">
+                        <label class="form-label">Price (₹)</label>
+                        <input type="number" id="customPrice" class="form-control" value="0" min="0" step="0.01" placeholder="Enter price" />
+                    </div>
+                    <div class="col-md-3 mb-3 d-flex align-items-end">
+                        <button type="button" id="addItemBtn" class="btn btn-secondary">Add Item</button>
+                    </div>
                 </div>
 
                 <div class="col-12">
@@ -193,6 +189,9 @@
                     </table>
                 </div>
             </div>
+
+            <!-- Hidden description field for backend -->
+            <input type="hidden" name="description" id="descriptionField" />
 
             <div class="col-12">
                 <h5 class="mt-3">Pricing & Status</h5>
@@ -226,7 +225,9 @@
 
             <div class="col-md-4 mb-3">
                 <label class="form-label">Currency</label>
-                <input type="text" name="currency" class="form-control" value="INR" />
+                <select name="currency" class="form-select">
+                    <option value="INR" selected>INR</option>
+                </select>
             </div>
 
             <div class="col-md-4 mb-3">
@@ -327,14 +328,12 @@
                 }
             }
             
-            // Additional validation for description orders
-            const hasDescription = descriptionTextarea.value.trim() !== '';
-            const totalPrice = parseFloat(document.querySelector('input[name="total_price"]').value) || 0;
-            
-            if (hasDescription && totalPrice <= 0) {
+            // Check if at least one item is added or description is provided
+            const hasItems = itemsTbody.querySelectorAll('tr').length > 0;
+            if (!hasItems) {
                 e.preventDefault();
-                document.querySelector('input[name="total_price"]').focus();
-                alert('Description orders must have a total price greater than 0. Please set the Grand Total (Paid) amount.');
+                itemSearch.focus();
+                alert('Please add at least one item or description to the order.');
                 return false;
             }
             
@@ -343,66 +342,125 @@
 
         // -- Add Item (vanilla JS) --
         const addItemBtn = document.getElementById('addItemBtn');
-        const variantSelect = document.getElementById('variantSelect');
+        const itemSearch = document.getElementById('itemSearch');
+        const searchResults = document.getElementById('searchResults');
         const variantQty = document.getElementById('variantQty');
         const itemsTbody = document.querySelector('#itemsTable tbody');
 
         // Zoho taxes passed from server-side if available; fallback to empty array
         window.zohoTaxes = @json($zohoTaxes ?? []);
 
-        // Description functionality
-        const addDescriptionBtn = document.getElementById('addDescriptionBtn');
-        const removeDescriptionBtn = document.getElementById('removeDescriptionBtn');
-        const descriptionSection = document.getElementById('descriptionSection');
-        const lineItemsSection = document.getElementById('lineItemsSection');
-        const descriptionTextarea = document.getElementById('descriptionTextarea');
+        // Store all variants for searching
+        const allVariants = @json($variantsForJs);
 
-        if (addDescriptionBtn) {
-            addDescriptionBtn.addEventListener('click', function() {
-                // Show description section
-                descriptionSection.style.display = 'block';
-                // Hide line items section
-                lineItemsSection.style.display = 'none';
-                // Disable add description button
-                addDescriptionBtn.disabled = true;
-                addDescriptionBtn.textContent = 'Description Added';
-                // Make description required
-                descriptionTextarea.setAttribute('required', 'required');
-                // Clear any existing line items
-                itemsTbody.innerHTML = '';
-                // Clear line item totals
-                clearTotals();
-                // Focus on total price field and highlight it
-                const totalPriceField = document.querySelector('input[name="total_price"]');
-                if (totalPriceField) {
-                    totalPriceField.focus();
-                    totalPriceField.style.border = '2px solid #007bff';
-                    totalPriceField.placeholder = 'Enter total amount for this service';
+        let selectedVariant = null;
+        let searchTimeout = null;
+
+        // Search functionality
+        itemSearch.addEventListener('input', function() {
+            const query = this.value.trim();
+            
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                if (query.length < 2) {
+                    searchResults.style.display = 'none';
+                    selectedVariant = null;
+                    clearHiddenFields();
+                    return;
                 }
+
+                const matches = allVariants.filter(v => 
+                    v.search_text.toLowerCase().includes(query.toLowerCase())
+                );
+
+                if (matches.length > 0) {
+                    showSearchResults(matches, query);
+                } else {
+                    showCustomDescriptionOption(query);
+                }
+            }, 300);
+        });
+
+        // Hide search results when clicking outside
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('#itemSearch') && !e.target.closest('#searchResults')) {
+                searchResults.style.display = 'none';
+            }
+        });
+
+        function showSearchResults(matches, query) {
+            let html = '';
+            matches.slice(0, 10).forEach(variant => {
+                html += `<div class="dropdown-item" style="cursor: pointer;" data-variant='${JSON.stringify(variant)}'>
+                    <strong>${escapeHtml(variant.product_title)}</strong> — ${escapeHtml(variant.title)}<br>
+                    <small class="text-muted">SKU: ${escapeHtml(variant.sku)} | Price: ₹${variant.price}</small>
+                </div>`;
             });
+            
+            // Add custom description option at the end
+            html += `<div class="dropdown-divider"></div>`;
+            html += `<div class="dropdown-item" style="cursor: pointer;" data-custom-description="${escapeHtml(query)}">
+                <i class="fas fa-plus text-primary"></i> Add "${escapeHtml(query)}" as custom description
+            </div>`;
+            
+            searchResults.innerHTML = html;
+            searchResults.style.display = 'block';
         }
 
-        if (removeDescriptionBtn) {
-            removeDescriptionBtn.addEventListener('click', function() {
-                // Hide description section
-                descriptionSection.style.display = 'none';
-                // Show line items section
-                lineItemsSection.style.display = 'block';
-                // Enable add description button
-                addDescriptionBtn.disabled = false;
-                addDescriptionBtn.textContent = 'Add Description';
-                // Remove description requirement
-                descriptionTextarea.removeAttribute('required');
-                // Clear description
-                descriptionTextarea.value = '';
-                // Reset total price field styling
-                const totalPriceField = document.querySelector('input[name="total_price"]');
-                if (totalPriceField) {
-                    totalPriceField.style.border = '';
-                    totalPriceField.placeholder = '';
-                }
-            });
+        function showCustomDescriptionOption(query) {
+            const html = `<div class="dropdown-item" style="cursor: pointer;" data-custom-description="${escapeHtml(query)}">
+                <i class="fas fa-plus text-primary"></i> Add "${escapeHtml(query)}" as custom description
+            </div>`;
+            
+            searchResults.innerHTML = html;
+            searchResults.style.display = 'block';
         }
+
+        // Handle search result selection
+        searchResults.addEventListener('click', function(e) {
+            const item = e.target.closest('.dropdown-item');
+            if (!item) return;
+
+            const customPriceSection = document.getElementById('customPriceSection');
+
+            if (item.dataset.variant) {
+                // Product variant selected
+                selectedVariant = JSON.parse(item.dataset.variant);
+                itemSearch.value = `${selectedVariant.product_title} — ${selectedVariant.title}`;
+                setHiddenFields(selectedVariant);
+                // Hide price field for product variants
+                customPriceSection.style.display = 'none';
+            } else if (item.dataset.customDescription) {
+                // Custom description selected
+                selectedVariant = null;
+                itemSearch.value = item.dataset.customDescription;
+                clearHiddenFields();
+                // Show price field for custom descriptions
+                customPriceSection.style.display = 'block';
+            }
+            
+            searchResults.style.display = 'none';
+        });
+
+        function setHiddenFields(variant) {
+            document.getElementById('selectedVariantId').value = variant.id;
+            document.getElementById('selectedProductId').value = variant.product_id;
+            document.getElementById('selectedSku').value = variant.sku;
+            document.getElementById('selectedPrice').value = variant.price;
+            document.getElementById('selectedTitle').value = variant.title;
+            document.getElementById('selectedProductTitle').value = variant.product_title;
+        }
+
+        function clearHiddenFields() {
+            document.getElementById('selectedVariantId').value = '';
+            document.getElementById('selectedProductId').value = '';
+            document.getElementById('selectedSku').value = '';
+            document.getElementById('selectedPrice').value = '';
+            document.getElementById('selectedTitle').value = '';
+            document.getElementById('selectedProductTitle').value = '';
+        }
+
+        // Description functionality - removed as we're using unified approach
 
         function clearTotals() {
             setNumberInput('subtotal_price', '');
@@ -412,31 +470,19 @@
 
         if (addItemBtn) {
             addItemBtn.addEventListener('click', function() {
-                const opt = variantSelect.options[variantSelect.selectedIndex];
-                if (!opt || !opt.value) {
-                    alert('Please select a product variant to add.');
+                const searchValue = itemSearch.value.trim();
+                if (!searchValue) {
+                    alert('Please search for a product or enter a description.');
                     return;
                 }
 
-                // If this is the first item being added, disable description
-                if (itemsTbody.querySelectorAll('tr').length === 0) {
-                    addDescriptionBtn.disabled = true;
-                    addDescriptionBtn.textContent = 'Line Items Added';
-                    descriptionSection.style.display = 'none';
-                    descriptionTextarea.removeAttribute('required');
-                    descriptionTextarea.value = '';
-                }
-
-                const variantId = opt.value;
-                const productId = opt.dataset.product_id || '';
-                const sku = opt.dataset.sku || '';
-                const price = opt.dataset.price || '0';
-                const title = opt.dataset.title || opt.text || '';
-                const productTitle = opt.dataset.product_title || '';
                 const qty = parseInt(variantQty.value, 10) || 1;
+                const index = itemsTbody.querySelectorAll('tr').length;
 
-                    const index = itemsTbody.querySelectorAll('tr').length;
-                    const tr = document.createElement('tr');
+                if (selectedVariant) {
+                    // Adding a product variant
+                    const variant = selectedVariant;
+                    
                     // Build tax select HTML from cached zohoTaxes if available
                     let taxSelectHtml = '<select class="form-select form-select-sm tax-select" name="items[' + index + '][tax_id]">';
                     taxSelectHtml += '<option value="">Default</option>';
@@ -448,23 +494,52 @@
                     }
                     taxSelectHtml += '</select>';
 
+                    const tr = document.createElement('tr');
                     tr.innerHTML = `
-                        <td>${escapeHtml(productTitle)}</td>
+                        <td>${escapeHtml(variant.product_title)}</td>
                         <td>${taxSelectHtml}</td>
-                        <td>${escapeHtml(title)}</td>
-                        <td>${escapeHtml(sku)}</td>
-                        <td class="text-end">${price}<input type="hidden" name="items[${index}][price]" value="${price}"></td>
+                        <td>${escapeHtml(variant.title)}</td>
+                        <td>${escapeHtml(variant.sku)}</td>
+                        <td class="text-end">${variant.price}<input type="hidden" name="items[${index}][price]" value="${variant.price}"></td>
                         <td class="text-end">${qty}<input type="hidden" name="items[${index}][quantity]" value="${qty}"></td>
                         <td><button type="button" class="btn btn-sm btn-danger removeItemBtn">Remove</button></td>
-                        <input type="hidden" name="items[${index}][product_id]" value="${productId}">
-                        <input type="hidden" name="items[${index}][variant_id]" value="${variantId}">
-                        <input type="hidden" name="items[${index}][sku]" value="${sku}">
-                        <input type="hidden" name="items[${index}][title]" value="${escapeAttr(title)}">
+                        <input type="hidden" name="items[${index}][product_id]" value="${variant.product_id}">
+                        <input type="hidden" name="items[${index}][variant_id]" value="${variant.id}">
+                        <input type="hidden" name="items[${index}][sku]" value="${variant.sku}">
+                        <input type="hidden" name="items[${index}][title]" value="${escapeAttr(variant.title)}">
                     `;
+                    itemsTbody.appendChild(tr);
+                } else {
+                    // Adding a custom description item
+                    const customPrice = parseFloat(document.getElementById('customPrice').value) || 0;
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td colspan="3">${escapeHtml(searchValue)} <span class="badge bg-info">Custom (Misc Charge)</span></td>
+                        <td>MISC-SERVICE</td>
+                        <td class="text-end">${customPrice.toFixed(2)}<input type="hidden" name="items[${index}][price]" value="${customPrice}"></td>
+                        <td class="text-end">${qty}<input type="hidden" name="items[${index}][quantity]" value="${qty}"></td>
+                        <td><button type="button" class="btn btn-sm btn-danger removeItemBtn">Remove</button></td>
+                        <input type="hidden" name="items[${index}][product_id]" value="">
+                        <input type="hidden" name="items[${index}][variant_id]" value="">
+                        <input type="hidden" name="items[${index}][sku]" value="MISC-SERVICE">
+                        <input type="hidden" name="items[${index}][title]" value="${escapeAttr(searchValue)}">
+                        <input type="hidden" name="items[${index}][is_custom]" value="1">
+                    `;
+                    itemsTbody.appendChild(tr);
+                    
+                    // Update description field for backend
+                    updateDescriptionField();
+                }
 
-                itemsTbody.appendChild(tr);
-                variantSelect.selectedIndex = 0;
+                // Reset form
+                itemSearch.value = '';
                 variantQty.value = 1;
+                document.getElementById('customPrice').value = 0;
+                document.getElementById('customPriceSection').style.display = 'none';
+                selectedVariant = null;
+                clearHiddenFields();
+                searchResults.style.display = 'none';
+                
                 // Recompute pricing fields after adding
                 computeTotals();
             });
@@ -474,12 +549,10 @@
         itemsTbody.addEventListener('click', function(e) {
             if (e.target && e.target.classList.contains('removeItemBtn')) {
                 const row = e.target.closest('tr');
-                if (row) row.remove();
-                
-                // If no items left, re-enable description button
-                if (itemsTbody.querySelectorAll('tr').length === 0) {
-                    addDescriptionBtn.disabled = false;
-                    addDescriptionBtn.textContent = 'Add Description';
+                if (row) {
+                    row.remove();
+                    // Update description field after removal
+                    updateDescriptionField();
                 }
                 
                 // Recompute totals after removal
@@ -487,18 +560,29 @@
             }
         });
 
-        // Update preview/totals when variant selection or qty changes
-        variantSelect.addEventListener('change', function() {
-            // if no items added yet, show the selection as the subtotal preview
-            const rows = itemsTbody.querySelectorAll('tr').length;
-            if (rows === 0) {
-                updateTotalsFromSelection();
-            }
-        });
+        // Update description field with custom items
+        function updateDescriptionField() {
+            const customItems = [];
+            const rows = itemsTbody.querySelectorAll('tr');
+            rows.forEach(row => {
+                const isCustom = row.querySelector('input[name$="[is_custom]"]');
+                if (isCustom && isCustom.value === '1') {
+                    const titleInput = row.querySelector('input[name$="[title]"]');
+                    const qtyInput = row.querySelector('input[name$="[quantity]"]');
+                    if (titleInput && qtyInput) {
+                        const qty = parseInt(qtyInput.value) || 1;
+                        customItems.push(qty > 1 ? `${titleInput.value} (x${qty})` : titleInput.value);
+                    }
+                }
+            });
+            
+            document.getElementById('descriptionField').value = customItems.join(', ');
+        }
 
+        // Update preview/totals when quantity changes
         variantQty.addEventListener('input', function() {
-            const rows = itemsTbody.querySelectorAll('tr').length;
-            if (rows === 0) {
+            // Update preview if a variant is selected
+            if (selectedVariant) {
                 updateTotalsFromSelection();
             }
         });
@@ -512,7 +596,7 @@
             const rows = itemsTbody.querySelectorAll('tr').length;
             if (rows > 0) {
                 computeTotals();
-            } else {
+            } else if (selectedVariant) {
                 updateTotalsFromSelection();
             }
         }
@@ -522,15 +606,14 @@
         if (discountsInput) discountsInput.addEventListener('input', priceInputsChanged);
 
         function updateTotalsFromSelection() {
-            const opt = variantSelect.options[variantSelect.selectedIndex];
-            if (!opt || !opt.value) {
+            if (!selectedVariant) {
                 // clear totals
                 setNumberInput('subtotal_price', '');
                 setNumberInput('total_line_items_price', '');
                 setNumberInput('total_price', '');
                 return;
             }
-            const price = parseFloat(opt.dataset.price) || 0;
+            const price = parseFloat(selectedVariant.price) || 0;
             const qty = parseInt(variantQty.value, 10) || 1;
             const subtotal = price * qty;
             setNumberInput('subtotal_price', subtotal.toFixed(2));

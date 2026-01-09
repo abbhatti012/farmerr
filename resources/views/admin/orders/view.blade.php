@@ -295,7 +295,7 @@
                                                         <i class="ki-outline ki-phone fs-2 me-2"></i> Phone
                                                     </div>
                                                 </td>
-                                                <td class="fw-bold text-end">{{ @$order->billingAddress->phone }}</td>
+                                                <td class="fw-bold text-end">{{ $order->billingAddress?->phone ?? $order->phone ?? '' }}</td>
                                             </tr>
                                         </tbody>
                                     </table>
@@ -379,7 +379,7 @@
                                     <div class="mb-3">
                                         <label for="customer-phone" class="form-label">Customer Phone</label>
                                         <input type="text" id="customer-phone" name="customer_phone" class="form-control"
-                                            value="{{ $order->billingAddress->phone }}" readonly>
+                                            value="{{ $order->billingAddress?->phone ?? $order->phone ?? '' }}" readonly>
                                     </div>
 
                                     <button type="submit" class="btn btn-primary">Send Message</button>
@@ -450,7 +450,7 @@
                                     <div class="mb-3">
                                         <label for="customer-phone" class="form-label">Customer Phone</label>
                                         <input type="text" id="customer-phone" name="customer_phone" class="form-control"
-                                            value="{{ $order->billingAddress->phone }}" readonly>
+                                            value="{{ $order->billingAddress?->phone ?? $order->phone ?? '' }}" readonly>
                                     </div>
 
                                     <button type="submit" class="btn btn-primary">Send Message</button>
@@ -802,7 +802,7 @@
                                             {{ @$order->billingAddress->city }} , {{ @$order->billingAddress->zip }},<br />
                                             {{ @$order->billingAddress->province }}
                                             {{ @$order->billingAddress->country }} <br>
-                                            {{ @$order->billingAddress->phone }}
+                                            {{ $order->billingAddress?->phone ?? $order->phone ?? '' }}
                                         </div>
                                         <!--end::Card body-->
                                     </div>

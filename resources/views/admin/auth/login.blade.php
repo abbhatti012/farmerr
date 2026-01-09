@@ -6,15 +6,15 @@
 
 <head>
 <title>Farmerr</title>
-<link rel="shortcut icon" href="{{ asset('assets/admin/media/logos/farmerr.fav.webp') }}" />
+<link rel="shortcut icon" href="{{ asset('public/assets/admin/media/logos/farmerr.fav.webp') }}" />
     <meta charset="utf-8" />
 
     <link rel="canonical" href="sign-in.html" />
     <link rel="shortcut icon" href="{{ asset('admin/media/logos/favicon.ico') }}" />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,400,500,600,700" />
 
-    <link href="{{ asset('assets/admin/plugins/global/plugins.bundle.css') }}" rel="stylesheet" type="text/css" />
-    <link href="{{ asset('assets/admin/css/style.bundle.css') }}" rel="stylesheet" type="text/css" />
+    <link href="{{ asset('public/assets/admin/plugins/global/plugins.bundle.css') }}" rel="stylesheet" type="text/css" />
+    <link href="{{ asset('public/assets/admin/css/style.bundle.css') }}" rel="stylesheet" type="text/css" />
 
     <script async src="https://www.googletagmanager.com/gtag/js?id=UA-37564768-1"></script>
     <script>

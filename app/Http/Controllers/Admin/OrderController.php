@@ -397,6 +397,20 @@ class OrderController extends Controller
     {
         // Load product variants for the product dropdown in the order form
         $variants = \App\Models\ProductVariant::with('product')->whereNotNull('sku')->get();
+        
+        // Prepare variants data for JavaScript search
+        $variantsForJs = $variants->map(function($v) {
+            return [
+                'id' => $v->id,
+                'product_id' => $v->product_id,
+                'sku' => $v->sku,
+                'price' => $v->price,
+                'title' => $v->title,
+                'product_title' => $v->product->title ?? '',
+                'search_text' => ($v->product->title ?? '') . ' ' . $v->title . ' ' . $v->sku
+            ];
+        })->toArray();
+        
         // Try to fetch Zoho taxes server-side so the form can render tax dropdowns immediately
         $zohoTaxes = [];
         try {
@@ -416,6 +430,7 @@ class OrderController extends Controller
 
         return view('admin.orders.create', [
             'variants' => $variants,
+            'variantsForJs' => $variantsForJs,
             'zohoTaxes' => $zohoTaxes,
         ]);
     }
@@ -467,25 +482,21 @@ class OrderController extends Controller
             'tags' => 'nullable|string',
             // line items
             'items' => 'nullable|array',
-            'items.*.product_id' => 'required_with:items|integer',
-            'items.*.variant_id' => 'required_with:items|integer',
-            'items.*.sku' => 'required_with:items|string',
+            'items.*.product_id' => 'nullable|integer',
+            'items.*.variant_id' => 'nullable|integer',
+            'items.*.sku' => 'nullable|string',
             'items.*.price' => 'required_with:items|numeric',
             'items.*.quantity' => 'required_with:items|integer|min:1',
             'items.*.title' => 'nullable|string',
             'items.*.tax_id' => 'nullable|string',
+            'items.*.is_custom' => 'nullable|boolean',
         ]);
 
-        // Validate that either description or items are provided, but not both
-        $hasDescription = !empty($validated['description']);
+        // Validate that at least one item is provided
         $hasItems = !empty($validated['items']) && is_array($validated['items']);
         
-        if (!$hasDescription && !$hasItems) {
-            return back()->withErrors(['description' => 'Please provide either a description or line items.'])->withInput();
-        }
-        
-        if ($hasDescription && $hasItems) {
-            return back()->withErrors(['description' => 'Please provide either a description or line items, not both.'])->withInput();
+        if (!$hasItems) {
+            return back()->withErrors(['items' => 'Please add at least one item to the order.'])->withInput();
         }
 
         // Create order
@@ -580,20 +591,23 @@ class OrderController extends Controller
                         'computed_line_items_id' => $lineItemsId,
                     ]);
 
+                    // Handle custom description items
+                    $isCustom = isset($it['is_custom']) && $it['is_custom'];
+                    
                     $created = LineItem::create([
                         'order_id' => $order->id,
-                        'product_id' => $it['product_id'] ?? null,
+                        'product_id' => $isCustom ? null : ($it['product_id'] ?? null),
                         'line_items_id' => $lineItemsId,
-                        'variant_id' => $it['variant_id'] ?? null,
+                        'variant_id' => $isCustom ? null : ($it['variant_id'] ?? null),
                         'quantity' => $it['quantity'] ?? 1,
                         'price' => $it['price'] ?? 0,
                         'total_discount' => 0,
                         'name' => $it['title'] ?? null,
-                        'sku' => $it['sku'] ?? null,
+                        'sku' => $isCustom ? 'MISC-SERVICE' : ($it['sku'] ?? null), // Mark custom items as MISC-SERVICE
                         'fulfillment_status' => 'unfulfilled',
-                        'requires_shipping' => 1,
-                        'taxable' => 1,
-                        'tax_id' => $it['tax_id'] ?? null,
+                        'requires_shipping' => $isCustom ? 0 : 1,
+                        'taxable' => $isCustom ? 0 : 1,
+                        'tax_id' => $isCustom ? null : ($it['tax_id'] ?? null),
                         'title' => $it['title'] ?? null,
                     ]);
 
@@ -609,8 +623,6 @@ class OrderController extends Controller
                     ]);
                 }
             }
-        } else {
-            Log::info('Order created with description only', ['order_id' => $order->id, 'description' => $validated['description']]);
         }
 
         // If the order has line items, attempt to create an invoice in Zoho automatically.
@@ -1130,6 +1142,22 @@ class OrderController extends Controller
                 }
                 
                 foreach ($lineItems as $lineItem) {
+                    // For custom items (MISC-SERVICE), use the line item directly
+                    if ($lineItem->sku === 'MISC-SERVICE') {
+                        $total_price += $lineItem->price * $lineItem->quantity;
+                        
+                        // Custom items don't need tax resolution from Zoho
+                        $cartData[] = (object)[
+                            'qty' => $lineItem->quantity,
+                            'item_id' => 'MISC-SERVICE',
+                            'price' => $lineItem->price,
+                            'title' => $lineItem->title ?? $lineItem->name,
+                            'tax_id' => null, // Custom items are typically non-taxable
+                        ];
+                        continue;
+                    }
+                    
+                    // For regular products, do the existing logic
                     $product = LineItem::where('line_items_id', $lineItem->line_items_id)->first();
                     if (!$product || !$product->sku) {
                         $request->session()->flash('message', 'Error: Zoho SKU not added for product id.');
@@ -1358,6 +1386,22 @@ class OrderController extends Controller
                 }
                 
                 foreach ($lineItems as $lineItem) {
+                    // For custom items (MISC-SERVICE), use the line item directly
+                    if ($lineItem->sku === 'MISC-SERVICE') {
+                        $total_price += $lineItem->price * $lineItem->quantity;
+                        
+                        // Custom items don't need tax resolution from Zoho
+                        $cartData[] = (object)[
+                            'qty' => $lineItem->quantity,
+                            'item_id' => 'MISC-SERVICE',
+                            'price' => $lineItem->price,
+                            'title' => $lineItem->title ?? $lineItem->name,
+                            'tax_id' => null, // Custom items are typically non-taxable
+                        ];
+                        continue;
+                    }
+                    
+                    // For regular products, do the existing logic
                     $product = LineItem::where('line_items_id', $lineItem->line_items_id)->first();
                     if (!$product || !$product->sku) {
                         $request->session()->flash('message', 'Error: Zoho SKU not added for product id.');
@@ -1775,6 +1819,19 @@ class OrderController extends Controller
         // Load product variants for the product dropdown in the order form
         $variants = \App\Models\ProductVariant::with('product')->whereNotNull('sku')->get();
         
+        // Prepare variants data for JavaScript search
+        $variantsForJs = $variants->map(function($v) {
+            return [
+                'id' => $v->id,
+                'product_id' => $v->product_id,
+                'sku' => $v->sku,
+                'price' => $v->price,
+                'title' => $v->title,
+                'product_title' => $v->product->title ?? '',
+                'search_text' => ($v->product->title ?? '') . ' ' . $v->title . ' ' . $v->sku
+            ];
+        })->toArray();
+        
         // Try to fetch Zoho taxes server-side so the form can render tax dropdowns immediately
         $zohoTaxes = [];
         try {
@@ -1859,6 +1916,7 @@ class OrderController extends Controller
         return view('admin.orders.edit', [
             'order' => $order,
             'variants' => $variants,
+            'variantsForJs' => $variantsForJs,
             'zohoTaxes' => $zohoTaxes,
             'templates' => $processedTemplates,
         ]);
@@ -1911,25 +1969,21 @@ class OrderController extends Controller
             'financial_status' => 'required|in:pending,paid,refunded,partially_refunded',
             // line items
             'items' => 'nullable|array',
-            'items.*.product_id' => 'required_with:items|integer',
-            'items.*.variant_id' => 'required_with:items|integer',
-            'items.*.sku' => 'required_with:items|string',
+            'items.*.product_id' => 'nullable|integer',
+            'items.*.variant_id' => 'nullable|integer',
+            'items.*.sku' => 'nullable|string',
             'items.*.price' => 'required_with:items|numeric',
             'items.*.quantity' => 'required_with:items|integer|min:1',
             'items.*.title' => 'nullable|string',
             'items.*.tax_id' => 'nullable|string',
+            'items.*.is_custom' => 'nullable|boolean',
         ]);
 
-        // Validate that either description or items are provided, but not both
-        $hasDescription = !empty($validated['description']);
+        // Validate that at least one item is provided
         $hasItems = !empty($validated['items']) && is_array($validated['items']);
         
-        if (!$hasDescription && !$hasItems) {
-            return back()->withErrors(['description' => 'Please provide either a description or line items.'])->withInput();
-        }
-        
-        if ($hasDescription && $hasItems) {
-            return back()->withErrors(['description' => 'Please provide either a description or line items, not both.'])->withInput();
+        if (!$hasItems) {
+            return back()->withErrors(['items' => 'Please add at least one item to the order.'])->withInput();
         }
         
         // Update the main order
@@ -2016,20 +2070,23 @@ class OrderController extends Controller
                         $lineItemsId = 'manual-' . $order->id . '-' . ($idx + 1);
                     }
 
+                    // Handle custom description items
+                    $isCustom = isset($it['is_custom']) && $it['is_custom'];
+
                     LineItem::create([
                         'order_id' => $order->id,
-                        'product_id' => $it['product_id'] ?? null,
+                        'product_id' => $isCustom ? null : ($it['product_id'] ?? null),
                         'line_items_id' => $lineItemsId,
-                        'variant_id' => $it['variant_id'] ?? null,
+                        'variant_id' => $isCustom ? null : ($it['variant_id'] ?? null),
                         'quantity' => $it['quantity'] ?? 1,
                         'price' => $it['price'] ?? 0,
                         'total_discount' => 0,
                         'name' => $it['title'] ?? null,
-                        'sku' => $it['sku'] ?? null,
+                        'sku' => $isCustom ? 'MISC-SERVICE' : ($it['sku'] ?? null), // Mark custom items as MISC-SERVICE
                         'fulfillment_status' => 'unfulfilled',
-                        'requires_shipping' => 1,
-                        'taxable' => 1,
-                        'tax_id' => $it['tax_id'] ?? null,
+                        'requires_shipping' => $isCustom ? 0 : 1,
+                        'taxable' => $isCustom ? 0 : 1,
+                        'tax_id' => $isCustom ? null : ($it['tax_id'] ?? null),
                         'title' => $it['title'] ?? null,
                     ]);
                 } catch (\Exception $e) {
@@ -2148,6 +2205,22 @@ class OrderController extends Controller
                 }
                 
                 foreach ($lineItems as $lineItem) {
+                    // For custom items (MISC-SERVICE), use the line item directly
+                    if ($lineItem->sku === 'MISC-SERVICE') {
+                        $total_price += $lineItem->price * $lineItem->quantity;
+                        
+                        // Custom items don't need tax resolution from Zoho
+                        $cartData[] = (object)[
+                            'qty' => $lineItem->quantity,
+                            'item_id' => 'MISC-SERVICE',
+                            'price' => $lineItem->price,
+                            'title' => $lineItem->title ?? $lineItem->name,
+                            'tax_id' => null, // Custom items are typically non-taxable
+                        ];
+                        continue;
+                    }
+                    
+                    // For regular products, do the existing logic
                     $product = LineItem::where('line_items_id', $lineItem->line_items_id)->first();
                     if (!$product || !$product->sku) {
                         throw new \Exception('Zoho SKU not added for product id');
