@@ -536,32 +536,76 @@ class OrderController extends Controller
         ]);
 
         // Create billing address
-        BillingAddress::create([
-            'order_id' => $order->id,
-            'first_name' => $validated['customer_first_name'],
-            'last_name' => $validated['customer_last_name'],
-            'address1' => $validated['billing_address1'],
-            'city' => $validated['billing_city'],
-            'province' => $validated['billing_province'],
-            'country' => $validated['billing_country'],
-            'country_code' => $validated['billing_country_code'] ?? 'IN',
-            'phone' => $validated['phone'],
-            'name' => $validated['customer_first_name'].' '.$validated['customer_last_name'],
-        ]);
+        try {
+            $billingData = [
+                'order_id' => $order->id,
+                'first_name' => $validated['customer_first_name'],
+                'last_name' => $validated['customer_last_name'],
+                'address1' => $validated['billing_address1'],
+                'city' => $validated['billing_city'],
+                'province' => $validated['billing_province'],
+                'country' => $validated['billing_country'],
+                'country_code' => $validated['billing_country_code'] ?? 'IN',
+                'phone' => $validated['phone'],
+                'name' => $validated['customer_first_name'].' '.$validated['customer_last_name'],
+            ];
+            
+            Log::info('Creating billing address for new order', [
+                'order_id' => $order->id,
+                'billing_data' => $billingData
+            ]);
+            
+            $billingAddress = BillingAddress::create($billingData);
+            
+            Log::info('Billing address created successfully', [
+                'order_id' => $order->id,
+                'billing_address_id' => $billingAddress->id,
+                'created_data' => $billingAddress->toArray()
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to create billing address', [
+                'order_id' => $order->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;
+        }
 
         // Create shipping address
-        ShippingAddress::create([
-            'order_id' => $order->id,
-            'first_name' => $validated['customer_first_name'],
-            'last_name' => $validated['customer_last_name'],
-            'address1' => $validated['shipping_address1'],
-            'city' => $validated['shipping_city'],
-            'province' => $validated['shipping_province'],
-            'country' => $validated['shipping_country'],
-            'country_code' => $validated['shipping_country_code'] ?? 'IN',
-            'phone' => $validated['phone'],
-            'name' => $validated['customer_first_name'].' '.$validated['customer_last_name'],
-        ]);
+        try {
+            $shippingData = [
+                'order_id' => $order->id,
+                'first_name' => $validated['customer_first_name'],
+                'last_name' => $validated['customer_last_name'],
+                'address1' => $validated['shipping_address1'],
+                'city' => $validated['shipping_city'],
+                'province' => $validated['shipping_province'],
+                'country' => $validated['shipping_country'],
+                'country_code' => $validated['shipping_country_code'] ?? 'IN',
+                'phone' => $validated['phone'],
+                'name' => $validated['customer_first_name'].' '.$validated['customer_last_name'],
+            ];
+            
+            Log::info('Creating shipping address for new order', [
+                'order_id' => $order->id,
+                'shipping_data' => $shippingData
+            ]);
+            
+            $shippingAddress = ShippingAddress::create($shippingData);
+            
+            Log::info('Shipping address created successfully', [
+                'order_id' => $order->id,
+                'shipping_address_id' => $shippingAddress->id,
+                'created_data' => $shippingAddress->toArray()
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to create shipping address', [
+                'order_id' => $order->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;
+        }
     
         // Create line items if provided
         if ($hasItems) {
@@ -1926,6 +1970,17 @@ class OrderController extends Controller
     {
         $order = Order::findOrFail($orderId);
         
+        // Log the incoming request data for debugging
+        Log::info('Order update started', [
+            'order_id' => $orderId,
+            'order_number' => $order->order_number,
+            'is_shopify_order' => !empty($order->shopify_order_id),
+            'shopify_order_id' => $order->shopify_order_id,
+            'current_billing_address' => $order->billingAddress ? $order->billingAddress->toArray() : null,
+            'current_shipping_address' => $order->shippingAddress ? $order->shippingAddress->toArray() : null,
+            'request_data' => $request->all()
+        ]);
+        
         $validated = $request->validate([
             'customer_first_name' => 'required|string|max:255',
             'customer_last_name' => 'required|string|max:255',
@@ -1984,6 +2039,355 @@ class OrderController extends Controller
         
         if (!$hasItems) {
             return back()->withErrors(['items' => 'Please add at least one item to the order.'])->withInput();
+        }
+        
+        // Log validation success
+        Log::info('Order update validation passed', [
+            'order_id' => $orderId,
+            'validated_data' => $validated
+        ]);
+        
+        // Update the main order
+        try {
+            $orderUpdateData = [
+                'order_date' => $validated['order_date'],
+                'email' => $validated['email'],
+                'phone' => $validated['phone'],
+                'financial_status' => $validated['financial_status'],
+                'delivery_date' => $validated['delivery_date'],
+                'note' => $validated['order_notes'],
+                'description' => $validated['description'] ?? null,
+                'occasion' => $validated['order_type'] ?? null,
+                // pricing & status
+                'subtotal_price' => $validated['subtotal_price'] ?? 0,
+                'total_tax' => $validated['total_tax'] ?? 0,
+                'total_shipping_price' => $validated['total_shipping_price'] ?? 0,
+                'total_discounts' => $validated['total_discounts'] ?? 0,
+                'total_line_items_price' => $validated['total_line_items_price'] ?? 0,
+                'total_price' => $validated['total_price'] ?? ($validated['subtotal_price'] ?? 0),
+                'currency' => $validated['currency'] ?? 'INR',
+                'fulfillment_status' => $validated['fulfillment_status'] ?? 'unfulfilled',
+                'buyer_accepts_marketing' => isset($validated['buyer_accepts_marketing']) ? 1 : 0,
+                'confirmed' => isset($validated['confirmed']) ? 1 : 0,
+                'contact_email' => $validated['contact_email'] ?? null,
+                'tags' => $validated['tags'] ?? null,
+            ];
+            
+            Log::info('Updating main order', [
+                'order_id' => $orderId,
+                'update_data' => $orderUpdateData
+            ]);
+            
+            $order->update($orderUpdateData);
+            
+            Log::info('Main order updated successfully', [
+                'order_id' => $orderId
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to update main order', [
+                'order_id' => $orderId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            throw $e;
+        }
+        
+        // Update customer
+        $customer = $order->customer;
+        if ($customer) {
+            try {
+                $customerUpdateData = [
+                    'first_name' => $validated['customer_first_name'],
+                    'last_name' => $validated['customer_last_name'],
+                    'email' => $validated['email'],
+                    'phone' => $validated['phone'],
+                ];
+                
+                Log::info('Updating customer', [
+                    'order_id' => $orderId,
+                    'customer_id' => $customer->id,
+                    'update_data' => $customerUpdateData
+                ]);
+                
+                $customer->update($customerUpdateData);
+                
+                Log::info('Customer updated successfully', [
+                    'order_id' => $orderId,
+                    'customer_id' => $customer->id
+                ]);
+            } catch (\Exception $e) {
+                Log::error('Failed to update customer', [
+                    'order_id' => $orderId,
+                    'customer_id' => $customer->id,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+                throw $e;
+            }
+        } else {
+            Log::warning('No customer found for order', [
+                'order_id' => $orderId
+            ]);
+        }
+        
+        // Update billing address (create if missing for Shopify orders)
+        $billingAddress = $order->billingAddress;
+        if ($billingAddress) {
+            try {
+                $billingUpdateData = [
+                    'first_name' => $validated['customer_first_name'],
+                    'last_name' => $validated['customer_last_name'],
+                    'address1' => $validated['billing_address1'],
+                    'city' => $validated['billing_city'],
+                    'province' => $validated['billing_province'],
+                    'country' => $validated['billing_country'],
+                    'country_code' => $validated['billing_country_code'] ?? 'IN',
+                    'phone' => $validated['phone'],
+                    'name' => $validated['customer_first_name'].' '.$validated['customer_last_name'],
+                ];
+                
+                Log::info('Updating billing address', [
+                    'order_id' => $orderId,
+                    'billing_address_id' => $billingAddress->id,
+                    'current_data' => $billingAddress->toArray(),
+                    'update_data' => $billingUpdateData
+                ]);
+                
+                $billingAddress->update($billingUpdateData);
+                
+                // Reload to verify the update
+                $billingAddress->refresh();
+                
+                Log::info('Billing address updated successfully', [
+                    'order_id' => $orderId,
+                    'billing_address_id' => $billingAddress->id,
+                    'updated_data' => $billingAddress->toArray()
+                ]);
+            } catch (\Exception $e) {
+                Log::error('Failed to update billing address', [
+                    'order_id' => $orderId,
+                    'billing_address_id' => $billingAddress->id,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+                throw $e;
+            }
+        } else {
+            Log::warning('No billing address found for order', [
+                'order_id' => $orderId
+            ]);
+            
+            // Create billing address if missing (especially for Shopify orders)
+            if (!empty($order->shopify_order_id)) {
+                try {
+                    $billingData = [
+                        'order_id' => $order->id,
+                        'first_name' => $validated['customer_first_name'],
+                        'last_name' => $validated['customer_last_name'],
+                        'address1' => $validated['billing_address1'],
+                        'city' => $validated['billing_city'],
+                        'province' => $validated['billing_province'],
+                        'country' => $validated['billing_country'],
+                        'country_code' => $validated['billing_country_code'] ?? 'IN',
+                        'phone' => $validated['phone'],
+                        'name' => $validated['customer_first_name'].' '.$validated['customer_last_name'],
+                    ];
+                    
+                    Log::info('Creating missing billing address for Shopify order', [
+                        'order_id' => $orderId,
+                        'shopify_order_id' => $order->shopify_order_id,
+                        'billing_data' => $billingData
+                    ]);
+                    
+                    $billingAddress = BillingAddress::create($billingData);
+                    
+                    Log::info('Missing billing address created successfully', [
+                        'order_id' => $orderId,
+                        'billing_address_id' => $billingAddress->id,
+                        'created_data' => $billingAddress->toArray()
+                    ]);
+                } catch (\Exception $e) {
+                    Log::error('Failed to create missing billing address', [
+                        'order_id' => $orderId,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                }
+            }
+        }
+        
+        // Update shipping address (create if missing for Shopify orders)
+        $shippingAddress = $order->shippingAddress;
+        if ($shippingAddress) {
+            try {
+                $shippingUpdateData = [
+                    'first_name' => $validated['customer_first_name'],
+                    'last_name' => $validated['customer_last_name'],
+                    'address1' => $validated['shipping_address1'],
+                    'city' => $validated['shipping_city'],
+                    'province' => $validated['shipping_province'],
+                    'country' => $validated['shipping_country'],
+                    'country_code' => $validated['shipping_country_code'] ?? 'IN',
+                    'phone' => $validated['phone'],
+                    'name' => $validated['customer_first_name'].' '.$validated['customer_last_name'],
+                ];
+                
+                Log::info('Updating shipping address', [
+                    'order_id' => $orderId,
+                    'shipping_address_id' => $shippingAddress->id,
+                    'current_data' => $shippingAddress->toArray(),
+                    'update_data' => $shippingUpdateData
+                ]);
+                
+                $shippingAddress->update($shippingUpdateData);
+                
+                // Reload to verify the update
+                $shippingAddress->refresh();
+                
+                Log::info('Shipping address updated successfully', [
+                    'order_id' => $orderId,
+                    'shipping_address_id' => $shippingAddress->id,
+                    'updated_data' => $shippingAddress->toArray()
+                ]);
+            } catch (\Exception $e) {
+                Log::error('Failed to update shipping address', [
+                    'order_id' => $orderId,
+                    'shipping_address_id' => $shippingAddress->id,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+                throw $e;
+            }
+        } else {
+            Log::warning('No shipping address found for order', [
+                'order_id' => $orderId
+            ]);
+            
+            // Create shipping address if missing (especially for Shopify orders)
+            if (!empty($order->shopify_order_id)) {
+                try {
+                    $shippingData = [
+                        'order_id' => $order->id,
+                        'first_name' => $validated['customer_first_name'],
+                        'last_name' => $validated['customer_last_name'],
+                        'address1' => $validated['shipping_address1'],
+                        'city' => $validated['shipping_city'],
+                        'province' => $validated['shipping_province'],
+                        'country' => $validated['shipping_country'],
+                        'country_code' => $validated['shipping_country_code'] ?? 'IN',
+                        'phone' => $validated['phone'],
+                        'name' => $validated['customer_first_name'].' '.$validated['customer_last_name'],
+                    ];
+                    
+                    Log::info('Creating missing shipping address for Shopify order', [
+                        'order_id' => $orderId,
+                        'shopify_order_id' => $order->shopify_order_id,
+                        'shipping_data' => $shippingData
+                    ]);
+                    
+                    $shippingAddress = ShippingAddress::create($shippingData);
+                    
+                    Log::info('Missing shipping address created successfully', [
+                        'order_id' => $orderId,
+                        'shipping_address_id' => $shippingAddress->id,
+                        'created_data' => $shippingAddress->toArray()
+                    ]);
+                } catch (\Exception $e) {
+                    Log::error('Failed to create missing shipping address', [
+                        'order_id' => $orderId,
+                        'error' => $e->getMessage(),
+                        'trace' => $e->getTraceAsString()
+                    ]);
+                }
+            }
+        }
+        
+        // Update line items if provided
+        if (!empty($validated['items']) && is_array($validated['items'])) {
+            try {
+                Log::info('Updating line items', [
+                    'order_id' => $orderId,
+                    'items_count' => count($validated['items']),
+                    'items_data' => $validated['items']
+                ]);
+                
+                // First delete existing line items
+                $deletedCount = $order->lineItems()->count();
+                $order->lineItems()->delete();
+                
+                Log::info('Deleted existing line items', [
+                    'order_id' => $orderId,
+                    'deleted_count' => $deletedCount
+                ]);
+                
+                foreach ($validated['items'] as $idx => $it) {
+                    try {
+                        // Determine a safe line_items_id. Existing values may be numeric or custom strings.
+                        $lastLineItem = LineItem::orderBy('id', 'desc')->first();
+                        if ($lastLineItem && is_numeric($lastLineItem->line_items_id)) {
+                            $lineItemsId = $lastLineItem->line_items_id + 1;
+                        } else {
+                            // fallback to a manual identifier to avoid NULL constraints
+                            $lineItemsId = 'manual-' . $order->id . '-' . ($idx + 1);
+                        }
+
+                        // Handle custom description items
+                        $isCustom = isset($it['is_custom']) && $it['is_custom'];
+
+                        $lineItemData = [
+                            'order_id' => $order->id,
+                            'product_id' => $isCustom ? null : ($it['product_id'] ?? null),
+                            'line_items_id' => $lineItemsId,
+                            'variant_id' => $isCustom ? null : ($it['variant_id'] ?? null),
+                            'quantity' => $it['quantity'] ?? 1,
+                            'price' => $it['price'] ?? 0,
+                            'total_discount' => 0,
+                            'name' => $it['title'] ?? null,
+                            'sku' => $isCustom ? 'MISC-SERVICE' : ($it['sku'] ?? null), // Mark custom items as MISC-SERVICE
+                            'fulfillment_status' => 'unfulfilled',
+                            'requires_shipping' => $isCustom ? 0 : 1,
+                            'taxable' => $isCustom ? 0 : 1,
+                            'tax_id' => $isCustom ? null : ($it['tax_id'] ?? null),
+                            'title' => $it['title'] ?? null,
+                        ];
+                        
+                        Log::info('Creating line item', [
+                            'order_id' => $orderId,
+                            'item_index' => $idx,
+                            'line_item_data' => $lineItemData
+                        ]);
+
+                        $createdLineItem = LineItem::create($lineItemData);
+                        
+                        Log::info('Line item created successfully', [
+                            'order_id' => $orderId,
+                            'item_index' => $idx,
+                            'line_item_id' => $createdLineItem->id
+                        ]);
+                    } catch (\Exception $e) {
+                        Log::error('Failed to create line item for order', [
+                            'order_id' => $order->id,
+                            'item_index' => $idx,
+                            'item' => $it,
+                            'error' => $e->getMessage(),
+                            'trace' => $e->getTraceAsString()
+                        ]);
+                        throw $e;
+                    }
+                }
+                
+                Log::info('All line items updated successfully', [
+                    'order_id' => $orderId,
+                    'items_count' => count($validated['items'])
+                ]);
+            } catch (\Exception $e) {
+                Log::error('Failed to update line items', [
+                    'order_id' => $orderId,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString()
+                ]);
+                throw $e;
+            }
         }
         
         // Update the main order
@@ -2101,9 +2505,14 @@ class OrderController extends Controller
         
         // Automatically update in Zoho if invoice exists
         try {
+            Log::info('Checking for existing Zoho invoice', [
+                'order_id' => $orderId,
+                'order_number' => $order->order_number
+            ]);
+            
             $existingInvoice = ZohoController::getInvoiceByOrderNumber($order->order_number);
             if ($existingInvoice) {
-                \Log::info('Order updated - automatically updating Zoho invoice', [
+                Log::info('Order updated - automatically updating Zoho invoice', [
                     'order_id' => $order->id,
                     'order_number' => $order->order_number,
                     'invoice_id' => $existingInvoice['invoice_id']
@@ -2111,15 +2520,25 @@ class OrderController extends Controller
                 
                 // Update in Zoho while preserving the current invoice status
                 $this->updateOrderInZohoPreserveStatus($request, $order->order_number, $validated['items'] ?? null, $existingInvoice);
+            } else {
+                Log::info('No existing Zoho invoice found for order', [
+                    'order_id' => $orderId,
+                    'order_number' => $order->order_number
+                ]);
             }
         } catch (\Exception $e) {
-            \Log::warning('Failed to automatically update Zoho invoice after order edit', [
+            Log::warning('Failed to automatically update Zoho invoice after order edit', [
                 'order_id' => $order->id,
                 'order_number' => $order->order_number,
                 'error' => $e->getMessage()
             ]);
             // Don't fail the order update if Zoho update fails
         }
+        
+        Log::info('Order update completed successfully', [
+            'order_id' => $orderId,
+            'order_number' => $order->order_number
+        ]);
         
         return redirect()->route('admin.orders.show', $order->id)
             ->with('success', 'Order updated successfully');
