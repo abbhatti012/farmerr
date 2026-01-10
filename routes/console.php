@@ -38,8 +38,32 @@ Artisan::command('schedule:run-fetch-shopify-orders', function () {
 
 
 Artisan::command('create:zoho-invoices', function () {
+    \Log::info('Manual Zoho invoice creation command started', [
+        'timestamp' => now()->format('Y-m-d H:i:s'),
+        'triggered_by' => 'manual_command'
+    ]);
+    
     \App\Jobs\CreateZohoInvoices::dispatchSync();
     $this->info('ZohoInvoices orders processed successfully.');
+    
+    \Log::info('Manual Zoho invoice creation command completed', [
+        'timestamp' => now()->format('Y-m-d H:i:s')
+    ]);
 })->purpose('Manually dispatch the CreateZohoInvoices job');
+
+// Add scheduled command for Zoho invoices
+Artisan::command('schedule:zoho-invoices', function () {
+    \Log::info('Scheduled Zoho invoice creation started', [
+        'timestamp' => now()->format('Y-m-d H:i:s'),
+        'triggered_by' => 'scheduler'
+    ]);
+    
+    \App\Jobs\CreateZohoInvoices::dispatchSync();
+    $this->info('Scheduled Zoho invoice creation completed.');
+    
+    \Log::info('Scheduled Zoho invoice creation completed', [
+        'timestamp' => now()->format('Y-m-d H:i:s')
+    ]);
+})->purpose('Scheduled Zoho invoice creation');
 
 

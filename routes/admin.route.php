@@ -18,6 +18,22 @@ Route::get('/run-shopify-orders', function () {
     Artisan::call('fetch:shopify-orders');
     return 'Shopify orders fetched successfully!';
 });
+
+// Add route for batch Zoho invoice creation (similar to run-shopify-orders)
+Route::get('/run-zoho-invoices', function () {
+    \Log::info('Batch Zoho invoice creation started via route', [
+        'timestamp' => now()->format('Y-m-d H:i:s'),
+        'triggered_by' => 'cron_route'
+    ]);
+    
+    Artisan::call('create:zoho-invoices');
+    
+    \Log::info('Batch Zoho invoice creation completed via route', [
+        'timestamp' => now()->format('Y-m-d H:i:s')
+    ]);
+    
+    return 'Zoho invoices batch processing completed successfully!';
+});
     Route::get('/tax-id/{rate}', [ZohoController::class, 'getTaxIdByRateRoute']);
 // Route::get('/zoho/branches', function () {
 //     $branches = ZohoController::getBranches();

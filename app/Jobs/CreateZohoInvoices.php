@@ -48,6 +48,13 @@ class CreateZohoInvoices implements ShouldQueue
             \Log::info('Zoho invoice already exists for order ' . $order->order_number);
             return;
         }
+        
+        \Log::info('=== ZOHO INVOICE CREATION START ===', [
+            'order_id' => $order->id,
+            'order_number' => $order->order_number,
+            'timestamp' => now()->format('Y-m-d H:i:s')
+        ]);
+        
         $lineItems = $order->lineItems;
 
         $cartData = [];
@@ -82,7 +89,33 @@ class CreateZohoInvoices implements ShouldQueue
                 return;
             }
 
+            // Log customer details before sending to Zoho
+            \Log::info('Customer details for Zoho invoice', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'customer_id' => $customer->id,
+                'customer_first_name' => $customer->first_name,
+                'customer_last_name' => $customer->last_name,
+                'customer_email' => $customer->email,
+                'customer_phone' => $customer->phone,
+                'customer_full_data' => $customer->toArray()
+            ]);
+
+            \Log::info('About to call ZohoController::createOrGetCustomer', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'customer_id' => $customer->id,
+                'customer_name_to_send' => $customer->first_name . ' ' . $customer->last_name
+            ]);
+
             $customerFromZoho = ZohoController::createOrGetCustomer($customer->id, $addressPost);
+
+            \Log::info('Received customer from Zoho', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'zoho_customer_name' => $customerFromZoho->contact_name ?? 'N/A',
+                'zoho_customer_id' => $customerFromZoho->contact_id ?? 'N/A'
+            ]);
 
             // Create the Zoho Invoice
             ZohoController::createInvoice(
@@ -94,15 +127,23 @@ class CreateZohoInvoices implements ShouldQueue
                 $order->order_number
             );
 
-
-            // Dummy logic for testing
-            // \Log::info('Creating Zoho invoice for order ' . $order->order_number);
+            // Mark as processed
             $order->zoho_status = 1;
             $order->save();
 
-            // \Log::info('Zoho invoice created for order ' . $order->order_number);
+            \Log::info('=== ZOHO INVOICE CREATION SUCCESS ===', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'zoho_customer_name' => $customerFromZoho->contact_name ?? 'N/A'
+            ]);
+            
         } catch (\Exception $e) {
-            \Log::error('Failed to create Zoho invoice for order ' . $order->order_number . ': ' . $e->getMessage());
+            \Log::error('=== ZOHO INVOICE CREATION FAILED ===', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
         }
     }
 }

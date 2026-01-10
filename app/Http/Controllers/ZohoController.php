@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use App\Models\ShippingAddress;
 use App\Models\Order;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class ZohoController extends Controller
 {
@@ -2068,39 +2069,183 @@ class ZohoController extends Controller
     public static function createOrGetCustomer($customerId, $address = [])
     {
         $customer = Customer::where('id', $customerId)->first();
-        $isExists = self::isCustomerExists($customer->email);
-        if ($isExists) {
-        } else {
+        
+        // Add detailed logging for customer name debugging
+        Log::info('=== ZOHO CUSTOMER CREATION DEBUG START ===', [
+            'customer_id' => $customerId,
+            'customer_data' => $customer ? $customer->toArray() : null,
+            'address_data' => $address
+        ]);
+        
+        if (!$customer) {
+            Log::error('Customer not found in database', ['customer_id' => $customerId]);
+            throw new \Exception("Customer not found with ID: {$customerId}");
+        }
+        
+        $customerName = $customer->first_name . " " . $customer->last_name;
+        Log::info('Customer name constructed', [
+            'customer_id' => $customerId,
+            'first_name' => $customer->first_name,
+            'last_name' => $customer->last_name,
+            'full_name' => $customerName,
+            'email' => $customer->email,
+            'phone' => $customer->phone ?? $customer->mobile ?? 'N/A'
+        ]);
+        
+        // Skip Zoho customer lookup if email is null - always create new customer
+        if (empty($customer->email)) {
+            Log::info('Customer has no email - creating new customer in Zoho instead of searching', [
+                'customer_id' => $customerId,
+                'customer_name' => $customerName
+            ]);
+            
             $client = new Client();
             $customerSendData = [
-                "contact_name" => $customer->first_name . " " . $customer->last_name,
-                "email" => $customer->email,
-                "phone" => $customer->mobile,
+                "contact_name" => $customerName,
+                "email" => '', // Empty string instead of null
+                "phone" => $customer->phone ?? $customer->mobile ?? '',
                 "billing_address" => $address,
                 "shipping_address" => $address,
                 "contact_persons" => [
                     [
-                        "email" => $customer->email,
-                        "phone" => $customer->mobile,
+                        "email" => '',
+                        "phone" => $customer->phone ?? $customer->mobile ?? '',
                     ]
                 ],
             ];
-            // dd($customerSendData);
+            
+            Log::info('Creating new customer in Zoho (no email)', [
+                'customer_id' => $customerId,
+                'zoho_payload' => $customerSendData
+            ]);
+            
             if ($customer->gstin != "") {
                 $customerSendData['company_name'] = $customer->company;
                 $customerSendData['gst_treatment'] = "business_gst";
                 $customerSendData['gst_no'] = $customer->gstin;
             }
-            $response = $client->post('https://www.zohoapis.com/books/v3/contacts?organization_id=' . env('ZOHO_API_ORGANIZATION_ID'), [
-                'headers' => [
-                    'Authorization' => 'Zoho-oauthtoken ' . self::generateToken(),
-                    'Content-Type' => 'application/json',
-                ],
-                'json' => $customerSendData
+            
+            try {
+                $response = $client->post('https://www.zohoapis.com/books/v3/contacts?organization_id=' . env('ZOHO_API_ORGANIZATION_ID'), [
+                    'headers' => [
+                        'Authorization' => 'Zoho-oauthtoken ' . self::generateToken(),
+                        'Content-Type' => 'application/json',
+                    ],
+                    'json' => $customerSendData
+                ]);
+                
+                $responseBody = json_decode($response->getBody(), true);
+                Log::info('Zoho customer creation response (no email)', [
+                    'customer_id' => $customerId,
+                    'status_code' => $response->getStatusCode(),
+                    'response_body' => $responseBody
+                ]);
+                
+                // Return the newly created customer
+                $newCustomer = $responseBody['contact'] ?? null;
+                if ($newCustomer) {
+                    Log::info('=== ZOHO CUSTOMER CREATION DEBUG END ===', [
+                        'customer_id' => $customerId,
+                        'final_zoho_contact_name' => $newCustomer['contact_name'] ?? 'N/A'
+                    ]);
+                    return (object)$newCustomer;
+                }
+                
+            } catch (\Exception $e) {
+                Log::error('Failed to create customer in Zoho (no email)', [
+                    'customer_id' => $customerId,
+                    'error' => $e->getMessage(),
+                    'customer_data_sent' => $customerSendData
+                ]);
+                throw $e;
+            }
+        }
+        
+        // Original logic for customers with email
+        $isExists = self::isCustomerExists($customer->email);
+        Log::info('Checking if customer exists in Zoho', [
+            'customer_id' => $customerId,
+            'email' => $customer->email,
+            'exists_in_zoho' => $isExists
+        ]);
+        
+        if ($isExists) {
+            Log::info('Customer already exists in Zoho, retrieving existing customer', [
+                'customer_id' => $customerId,
+                'email' => $customer->email
             ]);
+        } else {
+            $client = new Client();
+            $customerSendData = [
+                "contact_name" => $customerName,
+                "email" => $customer->email,
+                "phone" => $customer->phone ?? $customer->mobile ?? '',
+                "billing_address" => $address,
+                "shipping_address" => $address,
+                "contact_persons" => [
+                    [
+                        "email" => $customer->email,
+                        "phone" => $customer->phone ?? $customer->mobile ?? '',
+                    ]
+                ],
+            ];
+            
+            Log::info('Creating new customer in Zoho', [
+                'customer_id' => $customerId,
+                'zoho_payload' => $customerSendData
+            ]);
+            
+            if ($customer->gstin != "") {
+                $customerSendData['company_name'] = $customer->company;
+                $customerSendData['gst_treatment'] = "business_gst";
+                $customerSendData['gst_no'] = $customer->gstin;
+                
+                Log::info('Adding GST details to Zoho customer', [
+                    'customer_id' => $customerId,
+                    'company' => $customer->company,
+                    'gstin' => $customer->gstin
+                ]);
+            }
+            
+            try {
+                $response = $client->post('https://www.zohoapis.com/books/v3/contacts?organization_id=' . env('ZOHO_API_ORGANIZATION_ID'), [
+                    'headers' => [
+                        'Authorization' => 'Zoho-oauthtoken ' . self::generateToken(),
+                        'Content-Type' => 'application/json',
+                    ],
+                    'json' => $customerSendData
+                ]);
+                
+                $responseBody = json_decode($response->getBody(), true);
+                Log::info('Zoho customer creation response', [
+                    'customer_id' => $customerId,
+                    'status_code' => $response->getStatusCode(),
+                    'response_body' => $responseBody
+                ]);
+                
+            } catch (\Exception $e) {
+                Log::error('Failed to create customer in Zoho', [
+                    'customer_id' => $customerId,
+                    'error' => $e->getMessage(),
+                    'customer_data_sent' => $customerSendData
+                ]);
+                throw $e;
+            }
         }
 
         $customerFromZoho = self::isCustomerFirst($customer->email);
+        
+        Log::info('Retrieved customer from Zoho', [
+            'customer_id' => $customerId,
+            'zoho_customer' => $customerFromZoho,
+            'zoho_contact_name' => $customerFromZoho->contact_name ?? 'N/A'
+        ]);
+        
+        Log::info('=== ZOHO CUSTOMER CREATION DEBUG END ===', [
+            'customer_id' => $customerId,
+            'final_zoho_contact_name' => $customerFromZoho->contact_name ?? 'N/A'
+        ]);
+        
         return $customerFromZoho;
     }
     public static function isCustomerExists($email)
