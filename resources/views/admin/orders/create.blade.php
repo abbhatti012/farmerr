@@ -133,10 +133,10 @@
                 <label class="form-label">Order Date *</label>
                 <input type="datetime-local" name="order_date" class="form-control" required value="{{ now()->format('Y-m-d\TH:i') }}" />
             </div>
-            <div class="col-12 mb-3">
+            <!-- <div class="col-12 mb-3">
                 <label class="form-label">Order Items / Notes *</label>
                 <textarea name="order_notes" class="form-control" rows="4" required></textarea>
-            </div>
+            </div> -->
 
             <div class="col-12 mt-4">
                 <h5>Add Line Items</h5>

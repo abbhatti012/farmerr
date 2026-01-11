@@ -23,6 +23,6 @@ Route::prefix('admin')->group(function () {
 Route::middleware('auth:sanctum')->prefix('admin')->group(function () {
     Route::get('orders', [AdminOrderController::class, 'index']);
     Route::get('orders/{order}', [AdminOrderController::class, 'show']);
+    Route::get('orders/details/{identifier}', [AdminOrderController::class, 'getOrderDetails']);
     Route::put('orders/{order}/financial-status', [AdminOrderController::class, 'updateFinancialStatus']);
-
 });

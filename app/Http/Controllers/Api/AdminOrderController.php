@@ -214,4 +214,194 @@ class AdminOrderController extends Controller
 
         return response()->json(['status' => 'success', 'message' => 'Financial status updated', 'order' => $order], 200);
     }
+
+    /**
+     * GET /api/admin/orders/details/{identifier}
+     * Get order details by order ID (database ID) or order number
+     * This endpoint can accept either the database ID or order number
+     */
+    public function getOrderDetails(Request $request, $identifier)
+    {
+        $user = $request->user();
+        if (! $user || ! ($user instanceof Admin)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Unauthenticated or unauthorized.'
+            ], 401);
+        }
+
+        try {
+            // Try to find by database ID first, then by order number
+            $order = Order::with([
+                'customer', 
+                'lineItems', 
+                'shippingAddress', 
+                'billingAddress', 
+                'noteAttributes'
+            ])
+            ->where('id', $identifier)
+            ->orWhere('order_number', $identifier)
+            ->first();
+
+            if (!$order) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Order not found with the provided identifier.'
+                ], 404);
+            }
+
+            // Calculate totals
+            $lineItemsTotal = $order->lineItems ? $order->lineItems->sum(function($item) {
+                return $item->price * $item->quantity;
+            }) : 0;
+
+            // Format the response with comprehensive order details
+            $orderData = [
+                'id' => $order->id,
+                'order_number' => $order->order_number,
+                'shopify_order_id' => $order->shopify_order_id,
+                'order_date' => $order->order_date,
+                'delivery_date' => $order->delivery_date,
+                'financial_status' => $order->financial_status,
+                'fulfillment_status' => $order->fulfillment_status,
+                'total_price' => (float) $order->total_price,
+                'subtotal_price' => (float) $order->subtotal_price,
+                'total_tax' => (float) $order->total_tax,
+                'total_shipping_price' => (float) $order->total_shipping_price,
+                'total_discounts' => (float) $order->total_discounts,
+                'currency' => $order->currency,
+                'email' => $order->email,
+                'phone' => $order->phone,
+                'note' => $order->note,
+                'description' => $order->description,
+                'occasion' => $order->occasion,
+                'zoho_status' => $order->zoho_status,
+                'created_at' => $order->created_at,
+                'updated_at' => $order->updated_at,
+                
+                // Customer details
+                'customer' => $order->customer ? [
+                    'id' => $order->customer->id,
+                    'first_name' => $order->customer->first_name,
+                    'last_name' => $order->customer->last_name,
+                    'email' => $order->customer->email,
+                    'phone' => $order->customer->phone,
+                    'mobile' => $order->customer->mobile,
+                    'company' => $order->customer->company,
+                    'gstin' => $order->customer->gstin,
+                ] : null,
+                
+                // Billing address
+                'billing_address' => $order->billingAddress ? [
+                    'name' => $order->billingAddress->name,
+                    'address1' => $order->billingAddress->address1,
+                    'address2' => $order->billingAddress->address2,
+                    'city' => $order->billingAddress->city,
+                    'province' => $order->billingAddress->province,
+                    'country' => $order->billingAddress->country,
+                    'zip' => $order->billingAddress->zip,
+                    'phone' => $order->billingAddress->phone,
+                ] : null,
+                
+                // Shipping address
+                'shipping_address' => $order->shippingAddress ? [
+                    'name' => $order->shippingAddress->name,
+                    'address1' => $order->shippingAddress->address1,
+                    'address2' => $order->shippingAddress->address2,
+                    'city' => $order->shippingAddress->city,
+                    'province' => $order->shippingAddress->province,
+                    'country' => $order->shippingAddress->country,
+                    'zip' => $order->shippingAddress->zip,
+                    'phone' => $order->shippingAddress->phone,
+                ] : null,
+                
+                // Line items
+                'line_items' => $order->lineItems ? $order->lineItems->map(function($item) {
+                    return [
+                        'id' => $item->id,
+                        'product_id' => $item->product_id,
+                        'variant_id' => $item->variant_id,
+                        'line_items_id' => $item->line_items_id,
+                        'quantity' => (int) $item->quantity,
+                        'price' => (float) $item->price,
+                        'total_discount' => (float) $item->total_discount,
+                        'name' => $item->name,
+                        'title' => $item->title,
+                        'sku' => $item->sku,
+                        'fulfillment_status' => $item->fulfillment_status,
+                        'requires_shipping' => (bool) $item->requires_shipping,
+                        'taxable' => (bool) $item->taxable,
+                        'tax_id' => $item->tax_id,
+                    ];
+                }) : [],
+                
+                // Note attributes - handle both JSON field and relationship
+                'note_attributes' => $this->formatNoteAttributes($order),
+                
+                // Calculated totals
+                'calculated_totals' => [
+                    'line_items_total' => (float) $lineItemsTotal,
+                    'items_count' => $order->lineItems ? $order->lineItems->count() : 0,
+                ]
+            ];
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Order details retrieved successfully.',
+                'data' => $orderData
+            ], 200);
+
+        } catch (\Exception $e) {
+            Log::error('Error retrieving order details via API', [
+                'identifier' => $identifier,
+                'error' => $e->getMessage(),
+                'admin_id' => $user->id ?? null
+            ]);
+
+            return response()->json([
+                'status' => 'error',
+                'message' => 'An error occurred while retrieving order details.'
+            ], 500);
+        }
+    }
+
+    /**
+     * Format note attributes from both JSON field and relationship
+     */
+    private function formatNoteAttributes($order)
+    {
+        $noteAttributes = [];
+
+        // Check if there's a noteAttributes relationship (single record)
+        if ($order->noteAttributes) {
+            $noteAttributes[] = [
+                'name' => $order->noteAttributes->name,
+                'value' => $order->noteAttributes->value,
+            ];
+        }
+
+        // Check if there's a note_attributes JSON field
+        if (!empty($order->note_attributes)) {
+            try {
+                $jsonAttributes = is_string($order->note_attributes) 
+                    ? json_decode($order->note_attributes, true) 
+                    : $order->note_attributes;
+                
+                if (is_array($jsonAttributes)) {
+                    foreach ($jsonAttributes as $attr) {
+                        if (isset($attr['name']) && isset($attr['value'])) {
+                            $noteAttributes[] = [
+                                'name' => $attr['name'],
+                                'value' => $attr['value'],
+                            ];
+                        }
+                    }
+                }
+            } catch (\Exception $e) {
+                // If JSON parsing fails, just continue
+            }
+        }
+
+        return $noteAttributes;
+    }
 }

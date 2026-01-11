@@ -101,8 +101,8 @@ class CreateZohoInvoices implements ShouldQueue
                 'customer_full_data' => $customer->toArray()
             ]);
 
-            \Log::info('About to call ZohoController::createOrGetCustomer', [
-                'order_id' => $order->id,
+            Log::info('About to call ZohoController::createInvoice', [
+                'order_database_id' => $order->id,
                 'order_number' => $order->order_number,
                 'customer_id' => $customer->id,
                 'customer_name_to_send' => $customer->first_name . ' ' . $customer->last_name
@@ -111,7 +111,7 @@ class CreateZohoInvoices implements ShouldQueue
             $customerFromZoho = ZohoController::createOrGetCustomer($customer->id, $addressPost);
 
             \Log::info('Received customer from Zoho', [
-                'order_id' => $order->id,
+                'order_database_id' => $order->id,
                 'order_number' => $order->order_number,
                 'zoho_customer_name' => $customerFromZoho->contact_name ?? 'N/A',
                 'zoho_customer_id' => $customerFromZoho->contact_id ?? 'N/A'

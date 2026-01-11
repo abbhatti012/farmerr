@@ -464,7 +464,7 @@ class OrderController extends Controller
             'delivery_time_slot' => 'required|string',
             'delivery_date' => 'required|date',
             'order_date' => 'required|date',
-            'order_notes' => 'required|string',
+            // 'order_notes' => 'required|string',
             'order_channel' => 'required|string',
             'description' => 'nullable|string',
             // pricing & status
@@ -508,7 +508,7 @@ class OrderController extends Controller
             'phone' => $validated['phone'],
             'financial_status' => 'pending',
             'delivery_date' => $validated['delivery_date'],
-            'note' => $validated['order_notes'],
+            // 'note' => $validated['order_notes'],
             'description' => $validated['description'] ?? null,
             'occasion' => $validated['order_type'] ?? null,
             // pricing & status
@@ -2005,7 +2005,7 @@ class OrderController extends Controller
             'delivery_time_slot' => 'required|string',
             'delivery_date' => 'required|date',
             'order_date' => 'required|date',
-            'order_notes' => 'required|string',
+            // 'order_notes' => 'required|string',
             'order_channel' => 'required|string',
             'description' => 'nullable|string',
             // pricing & status
@@ -2055,7 +2055,7 @@ class OrderController extends Controller
                 'phone' => $validated['phone'],
                 'financial_status' => $validated['financial_status'],
                 'delivery_date' => $validated['delivery_date'],
-                'note' => $validated['order_notes'],
+                // 'note' => $validated['order_notes'],
                 'description' => $validated['description'] ?? null,
                 'occasion' => $validated['order_type'] ?? null,
                 // pricing & status
@@ -2397,7 +2397,7 @@ class OrderController extends Controller
             'phone' => $validated['phone'],
             'financial_status' => $validated['financial_status'],
             'delivery_date' => $validated['delivery_date'],
-            'note' => $validated['order_notes'],
+            // 'note' => $validated['order_notes'],
             'description' => $validated['description'] ?? null,
             'occasion' => $validated['order_type'] ?? null,
             // pricing & status
