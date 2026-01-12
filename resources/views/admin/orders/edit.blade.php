@@ -166,6 +166,13 @@
                 @endphp
                 <input type="datetime-local" name="order_date" class="form-control" value="{{ old('order_date', $orderDateValue) }}" required />
             </div>
+            <div class="col-md-6 mb-3">
+                <label class="form-label">Send Payment Link to Customer</label>
+                <select name="send_payment_link" class="form-select">
+                    <option value="No" {{ old('send_payment_link', $order->send_payment_link ?? 'No') == 'No' ? 'selected' : '' }}>No</option>
+                    <option value="Yes" {{ old('send_payment_link', $order->send_payment_link ?? 'No') == 'Yes' ? 'selected' : '' }}>Yes</option>
+                </select>
+            </div>
             <!-- <div class="col-12 mb-3">
                 <label class="form-label">Order Items / Notes *</label>
                 <textarea name="order_notes" class="form-control" rows="4" required>{{ old('order_notes', $order->note ?? '') }}</textarea>

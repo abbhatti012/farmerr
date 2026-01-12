@@ -297,18 +297,31 @@ class OrderController extends Controller
     {
         $order = Order::findOrFail($orderId);
 
-        // Check if invoice exists in Zoho by calling the API
+        // Check if invoice exists in Zoho - trust database status primarily
         $zohoInvoiceExists = false;
         $zohoInvoiceStatus = null;
-        try {
-            $existingInvoice = ZohoController::getInvoiceByOrderNumber($order->order_number);
-            $zohoInvoiceExists = !is_null($existingInvoice);
-            $zohoInvoiceStatus = $existingInvoice['status'] ?? null;
-        } catch (\Exception $e) {
-            // If API call fails, assume invoice doesn't exist and log the error
-            \Log::warning('Failed to check Zoho invoice status for order ' . $order->order_number . ': ' . $e->getMessage());
+        
+        // Primary check: Database zoho_status field (most reliable)
+        $dbZohoStatus = $order->zoho_status ?? 0;
+        
+        if ($dbZohoStatus == 1) {
+            // Database says invoice was sent - trust this and hide button
+            $zohoInvoiceExists = true;
+            $zohoInvoiceStatus = 'Sent to Zoho';
+            
+            \Log::info('Order marked as sent in database - hiding Create Draft Order button', [
+                'order_number' => $order->order_number,
+                'db_zoho_status' => $dbZohoStatus
+            ]);
+        } else {
+            // Database says not sent - show button
             $zohoInvoiceExists = false;
-            $zohoInvoiceStatus = null;
+            $zohoInvoiceStatus = 'Not Sent';
+            
+            \Log::info('Order not sent to Zoho - showing Create Draft Order button', [
+                'order_number' => $order->order_number,
+                'db_zoho_status' => $dbZohoStatus
+            ]);
         }
 
         // Get previous and next order IDs
@@ -510,6 +523,7 @@ class OrderController extends Controller
             'delivery_date' => $validated['delivery_date'],
             // 'note' => $validated['order_notes'],
             'description' => $validated['description'] ?? null,
+            'send_payment_link' => $validated['send_payment_link'] ?? 'No',
             'occasion' => $validated['order_type'] ?? null,
             // pricing & status
             'subtotal_price' => $validated['subtotal_price'] ?? 0,
@@ -1254,14 +1268,33 @@ class OrderController extends Controller
             }
 
             $address = BillingAddress::where('order_id', $order_id)->first();
-            $addressPost = [
-                "attention" => $address->name,
-                "address" => substr($address->address1, 0, 100),
-                "city" => $address->city,
-                "state" => $address->province,
-                "zip" => $address->zip,
-                "country" => $address->country,
-            ];
+            
+            // Handle null address gracefully - let's see if Zoho accepts empty fields
+            $addressPost = [];
+            if ($address) {
+                $addressPost = [
+                    "attention" => $address->name,
+                    "address" => substr($address->address1, 0, 100),
+                    "city" => $address->city,
+                    "state" => $address->province,
+                    "zip" => $address->zip,
+                    "country" => $address->country,
+                ];
+            } else {
+                // Log that we're trying with empty address to see Zoho's response
+                \Log::info('No billing address found - testing Zoho with empty address', [
+                    'order_id' => $order_id,
+                    'order_number' => $order->order_number
+                ]);
+                $addressPost = [
+                    "attention" => null,
+                    "address" => null,
+                    "city" => null,
+                    "state" => null,
+                    "zip" => null,
+                    "country" => null,
+                ];
+            }
 
             $customerFromZoho = ZohoController::createOrGetCustomer($customer_id, $addressPost);
 
@@ -2057,6 +2090,7 @@ class OrderController extends Controller
                 'delivery_date' => $validated['delivery_date'],
                 // 'note' => $validated['order_notes'],
                 'description' => $validated['description'] ?? null,
+                'send_payment_link' => $validated['send_payment_link'] ?? 'No',
                 'occasion' => $validated['order_type'] ?? null,
                 // pricing & status
                 'subtotal_price' => $validated['subtotal_price'] ?? 0,
@@ -2399,6 +2433,7 @@ class OrderController extends Controller
             'delivery_date' => $validated['delivery_date'],
             // 'note' => $validated['order_notes'],
             'description' => $validated['description'] ?? null,
+            'send_payment_link' => $validated['send_payment_link'] ?? 'No',
             'occasion' => $validated['order_type'] ?? null,
             // pricing & status
             'subtotal_price' => $validated['subtotal_price'] ?? 0,

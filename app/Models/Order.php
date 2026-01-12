@@ -37,7 +37,8 @@ class Order extends Model
         'credit_note_status',
         'occasion',
         'delivery_date',
-        'gift_message'
+        'gift_message',
+        'send_payment_link'
     ];
 
     public function customer()

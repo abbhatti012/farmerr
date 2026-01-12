@@ -133,6 +133,13 @@
                 <label class="form-label">Order Date *</label>
                 <input type="datetime-local" name="order_date" class="form-control" required value="{{ now()->format('Y-m-d\TH:i') }}" />
             </div>
+            <div class="col-md-6 mb-3">
+                <label class="form-label">Send Payment Link to Customer</label>
+                <select name="send_payment_link" class="form-select">
+                    <option value="No">No</option>
+                    <option value="Yes">Yes</option>
+                </select>
+            </div>
             <!-- <div class="col-12 mb-3">
                 <label class="form-label">Order Items / Notes *</label>
                 <textarea name="order_notes" class="form-control" rows="4" required></textarea>

@@ -623,7 +623,18 @@ class ZohoController extends Controller
                 'reference_number' => $orderId,                   // Order Number (e.g., 20273)
                 // Removed 'invoice_number' to avoid conflict with Zoho auto-generation
                 'po_number'        => "ID-{$getOrder->id}",       // Database ID with prefix
-                'notes'            => "Order ID: {$getOrder->id} | Order Number: $orderId", // Both IDs
+                'notes'            => "Order Number: $orderId",   // Keep order number in notes
+                // Custom fields array for Zoho
+                'custom_fields' => [
+                    [
+                        'label' => 'website order ID',
+                        'value' => $getOrder->id
+                    ],
+                    [
+                        'label' => 'Do you want to send payment ink to customer',
+                        'value' => $getOrder->send_payment_link ?? 'No'  // Default to 'No' if not set
+                    ]
+                ],
                 // IMPORTANT:
                 'place_of_supply'  => $buyer,     // buyer’s 2-letter code
                 'gst_no'           => $sellerGst, // seller branch’s GSTIN
@@ -675,10 +686,13 @@ class ZohoController extends Controller
                 );
             }
 
-            \DB::table('orders')->where('id', $orderId)->update(['zoho_status' => 1]);
+            \DB::table('orders')->where('id', $getOrder->id)->update(['zoho_status' => 1]);
 
-            \Log::info('INVOICE-SUCCESS', [
+            \Log::info('INVOICE-SUCCESS - Database updated', [
                 'invoice_id' => $invoiceData['invoice']['invoice_id'],
+                'order_database_id' => $getOrder->id,
+                'order_number' => $orderId,
+                'zoho_status_updated' => 1,
                 'buyer' => $buyer,
                 'seller' => $sellerCode,
                 'isInter' => $isInter,
@@ -687,7 +701,7 @@ class ZohoController extends Controller
 
             return $invoiceData;
         } catch (\Exception $e) {
-            \DB::table('orders')->where('id', $orderId)->update(['zoho_status' => 0]);
+            \DB::table('orders')->where('id', $getOrder->id)->update(['zoho_status' => 0]);
 
             // Try to extract response body from Guzzle RequestException if present
             $responseBody = null;
