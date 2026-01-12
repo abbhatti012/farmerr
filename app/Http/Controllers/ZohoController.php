@@ -656,9 +656,12 @@ class ZohoController extends Controller
             }
             
             // Log the payload to see what's being sent to Zoho
-            Log::info('Zoho invoice payload with order IDs', [
+            Log::info('Zoho invoice payload with order IDs and payment link', [
                 'order_database_id' => $getOrder->id,
                 'order_number' => $orderId,
+                'send_payment_link_from_db' => $getOrder->send_payment_link,
+                'send_payment_link_used_in_payload' => $getOrder->send_payment_link ?? 'No',
+                'custom_fields_being_sent' => $payload['custom_fields'] ?? 'Not found',
                 'payload' => $payload
             ]);
 

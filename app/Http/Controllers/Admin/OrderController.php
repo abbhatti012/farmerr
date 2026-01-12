@@ -503,6 +503,7 @@ class OrderController extends Controller
             'items.*.title' => 'nullable|string',
             'items.*.tax_id' => 'nullable|string',
             'items.*.is_custom' => 'nullable|boolean',
+            'send_payment_link' => 'nullable|in:Yes,No',
         ]);
 
         // Validate that at least one item is provided
@@ -2065,6 +2066,7 @@ class OrderController extends Controller
             'items.*.title' => 'nullable|string',
             'items.*.tax_id' => 'nullable|string',
             'items.*.is_custom' => 'nullable|boolean',
+            'send_payment_link' => 'nullable|in:Yes,No',
         ]);
 
         // Validate that at least one item is provided
